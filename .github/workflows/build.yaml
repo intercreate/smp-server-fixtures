@@ -35,7 +35,20 @@ jobs:
           toolchains: arm-zephyr-eabi
           ccache-cache-key: ${{ matrix.os }}
 
-      - name: Build firmware
+      - name: Build native_sim serial fixture
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: smp-server-fixtures
+        shell: bash
+        run: west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
+
+      - name: Upload native_sim serial fixture
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smp-server-fixture-serial-${{ github.sha }}-native_sim
+        path: smp-server-fixtures/build/smp-server/zephyr/zephyr.exe
+
+      - name: Run Twister Integration
         id: build
         working-directory: smp-server-fixtures
         shell: bash
@@ -49,7 +62,7 @@ jobs:
           west twister -T apps -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
           echo "twister-out-dir=$TWISTER_OUT_DIR" >> $GITHUB_OUTPUT
 
-      - name: Upload build artifacts
+      - name: Upload twister artifacts
         uses: actions/upload-artifact@v4
         with:
           name: smp-server-fixtures-${{ github.sha }}-${{ matrix.os }}
