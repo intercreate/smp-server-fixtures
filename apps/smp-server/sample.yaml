@@ -52,7 +52,6 @@ tests:
       - >-
         EXTRA_CONF_FILE="serial.conf;
         grp_os.conf;
-        grp_img.conf;
         grp_fs.conf;
         grp_shell.conf;
         grp_stat.conf;
@@ -60,6 +59,8 @@ tests:
         grp_enum.conf;
         grp_zbasic.conf"
       - CONFIG_IMG_MANAGER=n
+      - CONFIG_MCUMGR_GRP_IMG=n
+      - CONFIG_MCUBOOT_UTIL_LOG_LEVEL_WRN=n
       - SB_CONFIG_BOOTLOADER_NONE=y
     platform_allow:
       - native_sim
