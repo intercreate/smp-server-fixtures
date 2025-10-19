@@ -1,0 +1,60 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build apps and tests
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: smp-server-fixtures
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+
+      - name: Setup Zephyr project
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: smp-server-fixtures
+          toolchains: arm-zephyr-eabi
+          ccache-cache-key: ${{ matrix.os }}
+
+      - name: Build firmware
+        working-directory: smp-server-fixtures
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            EXTRA_TWISTER_FLAGS="--short-build-path -O/tmp/twister-out"
+          fi
+          west twister -T apps -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smp-server-fixtures-{{ github.sha }}-{{ matrix.os }}
+          path: |
+            smp-server-fixtures/twister-out/**/*.hex
+            smp-server-fixtures/twister-out/**/*.bin
+            smp-server-fixtures/twister-out/**/*.exe
+            smp-server-fixtures/twister-out/**/*.elf
+            smp-server-fixtures/twister-out/**/*.map
+            smp-server-fixtures/twister-out/**/*.stat
+            smp-server-fixtures/twister-out/**/zephyr.dts
+            smp-server-fixtures/twister-out/**/build.log
+            smp-server-fixtures/twister-out/twister.log

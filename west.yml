@@ -1,10 +1,8 @@
 # Copyright (c) 2021 Nordic Semiconductor ASA
+# Copyright (c) 2025 Intercreate, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 manifest:
-  self:
-    west-commands: scripts/west-commands.yml
-
   remotes:
     - name: zephyrproject-rtos
       url-base: https://github.com/zephyrproject-rtos
@@ -12,11 +10,15 @@ manifest:
   projects:
     - name: zephyr
       remote: zephyrproject-rtos
-      revision: main
+      revision: 8a72d776c5af6522478155adc91a5f4edb2794e3
       import:
-        # By using name-allowlist we can clone only the modules that are
-        # strictly needed by the application.
         name-allowlist:
-          - cmsis_6    # required by the ARM port for Cortex-M
-          - hal_nordic # required by the custom_plank board (Nordic based)
-          - hal_stm32  # required by the nucleo_f302r8 board (STM32 based)
+          - cmsis_6
+          - hal_nordic
+          - hal_nxp
+          - hal_stm32
+          - hal_ti
+          - littlefs
+          - mbedtls
+          - mcuboot
+          - zcbor
