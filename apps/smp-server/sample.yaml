@@ -47,6 +47,25 @@ tests:
     integration_platforms:
       - native_sim
     build_only: true
+  smp_server.fixture.serial.native_sim:
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        grp_os.conf;
+        grp_img.conf;
+        grp_fs.conf;
+        grp_shell.conf;
+        grp_stat.conf;
+        grp_settings.conf;
+        grp_enum.conf;
+        grp_zbasic.conf"
+      - CONFIG_IMG_MANAGER=n
+      - SB_CONFIG_BOOTLOADER_NONE=y
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    build_only: true
   smp_server.udp.802154.subg:
     extra_args: EXTRA_CONF_FILE="udp.conf;802154-subg.conf"
     platform_allow: beagleconnect_freedom
