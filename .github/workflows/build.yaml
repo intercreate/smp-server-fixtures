@@ -46,7 +46,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smp-server-fixture-serial-${{ github.sha }}-native_sim
-        path: smp-server-fixtures/build/smp-server/zephyr/zephyr.exe
+          path: smp-server-fixtures/build/smp-server/zephyr/zephyr.exe
 
       - name: Run Twister Integration
         id: build
