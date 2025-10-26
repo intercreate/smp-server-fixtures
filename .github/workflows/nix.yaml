@@ -59,16 +59,6 @@ jobs:
           restore-keys: |
             zephyr-workspace-${{ runner.os }}-
 
-      # Cache Python virtual environment
-      # Invalidates when west.yml changes (affects Python dependencies via west packages)
-      - name: Cache Python venv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: python-venv-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/west.yml') }}
-          restore-keys: |
-            python-venv-${{ runner.os }}-
-
       # Cache ccache for faster C/C++ compilation
       - name: Cache ccache
         uses: actions/cache@v4
