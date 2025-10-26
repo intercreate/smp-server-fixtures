@@ -67,7 +67,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: cache-pip-${{ runner.os }}-${{ hashFiles('pylock.toml') }}
+          key: cache-pip-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/pylock.toml') }}
           restore-keys: |
             cache-pip-${{ runner.os }}-
 
@@ -95,34 +95,31 @@ jobs:
             echo "West workspace already initialized (from cache)"
           fi
 
-      # Enter Nix development environment and build
-      - name: Build with Nix environment
+      # Activate Nix development environment for all subsequent steps
+      - name: Setup Nix development environment
+        uses: nicknovitski/nix-develop@v1
+        with:
+          working-directory: smp-server-fixtures
+
+      - name: Show environment info
         working-directory: smp-server-fixtures
         run: |
-          nix develop --command bash -c '
-            set -e
+          echo "=== Environment Info ==="
+          echo "GCC: $(which gcc) - $(gcc --version | head -1)"
+          echo "Python: $(which python) - $(python --version)"
+          echo "West: $(which west) - $(west --version)"
+          ccache -s || echo "ccache empty"
 
-            # Show environment info
-            echo "=== Environment Info ==="
-            echo "GCC: $(which gcc) - $(gcc --version | head -1)"
-            echo "Python: $(which python) - $(python --version)"
-            echo "West: $(which west) - $(west --version)"
-            echo "Ccache: $(ccache -s || echo "empty")"
-            echo ""
+      - name: Build native_sim serial fixture
+        working-directory: smp-server-fixtures
+        run: west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
 
-            # Build native_sim serial fixture
-            echo "=== Building native_sim serial fixture ==="
-            west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
+      - name: Run Twister Integration
+        working-directory: smp-server-fixtures
+        run: west twister -T apps -v --inline-logs --integration --short-build-path -O /tmp/twister-out
 
-            # Run Twister integration tests
-            echo "=== Running Twister Integration Tests ==="
-            west twister -T apps -v --inline-logs --integration --short-build-path -O /tmp/twister-out
-
-            # Show ccache stats
-            echo ""
-            echo "=== Ccache Statistics ==="
-            ccache -s
-          '
+      - name: Show ccache stats
+        run: ccache -s
 
       # Upload native_sim serial fixture
       - name: Upload native_sim serial fixture
