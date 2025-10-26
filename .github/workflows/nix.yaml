@@ -60,11 +60,14 @@ jobs:
             zephyr-workspace-${{ runner.os }}-
 
       # Cache pip's wheel cache to avoid re-downloading Python packages
+      # The venv itself can't be cached due to hardcoded Nix Python paths,
+      # but pip's wheel cache (~/.cache/pip) contains the downloaded packages
+      # Key is based on pylock.toml which is generated from the exact installed packages
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: cache-pip-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/west.yml') }}
+          key: cache-pip-${{ runner.os }}-${{ hashFiles('pylock.toml') }}
           restore-keys: |
             cache-pip-${{ runner.os }}-
 

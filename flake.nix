@@ -113,9 +113,24 @@
           echo "🔄 Running west update..."
           west update || { echo "❌ west update failed"; exit 1; }
 
+          # Install Python dependencies from committed pylock.toml if it exists
+          # Otherwise fall back to west packages pip --install
+          if [ -f "pylock.toml" ]; then
+            echo "📦 Installing Python dependencies from pylock.toml..."
+            uv pip install --requirement pylock.toml || { echo "❌ Failed to install from pylock.toml"; exit 1; }
+          fi
+
           echo "📦 Installing Python dependencies via west..."
           west zephyr-export || { echo "❌ west zephyr-export failed"; exit 1; }
           west packages pip --install || { echo "❌ west packages pip --install failed"; exit 1; }
+
+
+          # Always regenerate pylock.toml to keep it up-to-date
+          echo "📝 Regenerating pylock.toml..."
+          uv pip freeze > requirements.tmp.in
+          uv pip compile requirements.tmp.in --format pylock.toml -o pylock.toml || { echo "❌ Failed to generate pylock.toml"; exit 1; }
+          rm requirements.tmp.in
+          echo "✓ pylock.toml regenerated"
 
           echo "🔧 Installing Zephyr SDK (arm-zephyr-eabi toolchain)..."
           west sdk install -t arm-zephyr-eabi || { echo "❌ Zephyr SDK installation failed"; exit 1; }
