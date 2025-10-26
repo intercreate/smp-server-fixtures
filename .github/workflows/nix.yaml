@@ -59,6 +59,15 @@ jobs:
           restore-keys: |
             zephyr-workspace-${{ runner.os }}-
 
+      # Cache pip's wheel cache to avoid re-downloading Python packages
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: cache-pip-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/west.yml') }}
+          restore-keys: |
+            cache-pip-${{ runner.os }}-
+
       # Cache ccache for faster C/C++ compilation
       - name: Cache ccache
         uses: actions/cache@v4
