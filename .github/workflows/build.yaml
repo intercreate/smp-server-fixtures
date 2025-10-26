@@ -2,6 +2,8 @@ name: Build
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -14,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -52,27 +54,19 @@ jobs:
         id: build
         working-directory: smp-server-fixtures
         shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            EXTRA_TWISTER_FLAGS="--short-build-path -O/tmp/twister-out"
-            TWISTER_OUT_DIR="/tmp/twister-out"
-          else
-            TWISTER_OUT_DIR="smp-server-fixtures/twister-out"
-          fi
-          west twister -T apps -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
-          echo "twister-out-dir=$TWISTER_OUT_DIR" >> $GITHUB_OUTPUT
+        run: west twister -T apps -v --inline-logs --integration
 
       - name: Upload twister artifacts
         uses: actions/upload-artifact@v4
         with:
           name: smp-server-fixtures-${{ github.sha }}-${{ matrix.os }}
           path: |
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.hex
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.bin
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.exe
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.elf
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.map
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.stat
-            ${{ steps.build.outputs.twister-out-dir }}/**/zephyr.dts
-            ${{ steps.build.outputs.twister-out-dir }}/**/build.log
-            ${{ steps.build.outputs.twister-out-dir }}/twister.log
+            smp-server-fixtures/twister-out/**/*.hex
+            smp-server-fixtures/twister-out/**/*.bin
+            smp-server-fixtures/twister-out/**/*.exe
+            smp-server-fixtures/twister-out/**/*.elf
+            smp-server-fixtures/twister-out/**/*.map
+            smp-server-fixtures/twister-out/**/*.stat
+            smp-server-fixtures/twister-out/**/zephyr.dts
+            smp-server-fixtures/twister-out/**/build.log
+            smp-server-fixtures/twister-out/twister.log

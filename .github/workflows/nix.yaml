@@ -1,0 +1,197 @@
+name: Build with Nix
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build with Nix (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: smp-server-fixtures
+          persist-credentials: false
+
+      # Install Nix with flakes enabled
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      # Cache the Nix store for fast dependency restoration
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Install system GCC for portable native_sim builds
+      - name: Install system GCC multilib
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-multilib g++-multilib
+
+      # Cache the Zephyr SDK
+      - name: Cache Zephyr SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/zephyr-sdk-0.17.4
+          key: zephyr-sdk-0.17.4-${{ runner.os }}
+
+      # Cache the workspace (zephyr, modules, bootloader)
+      # Exclude the current repo to avoid caching build artifacts
+      - name: Cache Zephyr workspace
+        uses: actions/cache@v4
+        with:
+          path: |
+            zephyr
+            modules
+            bootloader
+            .west
+          key: zephyr-workspace-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/west.yml') }}
+          restore-keys: |
+            zephyr-workspace-${{ runner.os }}-
+
+      # Cache pip's wheel cache to avoid re-downloading Python packages
+      # The venv itself can't be cached due to hardcoded Nix Python paths,
+      # but pip's wheel cache (~/.cache/pip) contains the downloaded packages
+      # Key is based on pylock.toml which is generated from the exact installed packages
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: cache-pip-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/pylock.toml') }}
+          restore-keys: |
+            cache-pip-${{ runner.os }}-
+
+      # Cache ccache for faster C/C++ compilation
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      # Initialize west workspace if not cached
+      # Note: west update will be run later by nix develop shell hook
+      # This step just sets up the workspace structure
+      - name: Initialize west workspace
+        working-directory: smp-server-fixtures
+        run: |
+          if [ ! -d "../.west" ]; then
+            echo "Initializing west workspace..."
+            pip3 install west
+            cd ..
+            west init -l smp-server-fixtures
+          else
+            echo "West workspace already initialized (from cache)"
+          fi
+
+      # Activate Nix development environment for all subsequent steps
+      # We export the environment ourselves instead of using nix-develop action
+      # to preserve the PATH order from our shellHook
+      - name: Setup Nix development environment
+        working-directory: smp-server-fixtures
+        run: |
+          # Capture environment from nix develop after shellHook runs
+          nix develop --command bash -c 'env' > /tmp/nix-env.txt
+
+          # Export all environment variables to GITHUB_ENV
+          # Skip Nix-internal variables that shouldn't be exported
+          SKIP_VARS="shellHook|buildPhase|buildInputs|nativeBuildInputs|propagatedBuildInputs|depsHostHost|depsTargetTarget|depsBuildBuild|depsBuildTarget|phases|outputs|stdenv|builder|__structuredAttrs|HOST_PATH"
+
+          while IFS='=' read -r name value; do
+            # Skip empty lines, PATH (handle separately), and Nix-internal variables
+            if [ -z "$name" ] || [ "$name" = "PATH" ] || echo "$name" | grep -qE "^($SKIP_VARS)"; then
+              continue
+            fi
+
+            # Handle multi-line values
+            if echo "$value" | grep -q $'\n'; then
+              delimiter="EOF_$(openssl rand -hex 8)"
+              echo "${name}<<${delimiter}" >> $GITHUB_ENV
+              echo "$value" >> $GITHUB_ENV
+              echo "${delimiter}" >> $GITHUB_ENV
+            else
+              echo "${name}=${value}" >> $GITHUB_ENV
+            fi
+          done < /tmp/nix-env.txt
+
+          # Export PATH preserving the order from nix develop
+          # The PATH from nix develop already has:
+          # 1. System paths (/usr/bin, /usr/local/bin) prepended by shellHook
+          # 2. venv bin directory from activation
+          # 3. Nix store paths
+          # We write them to GITHUB_PATH in REVERSE order because GitHub prepends
+          NIX_PATH=$(grep '^PATH=' /tmp/nix-env.txt | cut -d'=' -f2-)
+          IFS=':' read -ra PATH_ARRAY <<< "$NIX_PATH"
+
+          # Write in reverse order so GitHub's prepending results in correct order
+          for (( i=${#PATH_ARRAY[@]}-1; i>=0; i-- )); do
+            path_entry="${PATH_ARRAY[$i]}"
+            if [ -d "$path_entry" ]; then
+              echo "$path_entry" >> $GITHUB_PATH
+            fi
+          done
+
+          echo "✅ Nix environment exported to subsequent steps"
+
+      - run: cat smp-server-fixtures/nix-develop-init.log
+        if: always()
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nix-develop-log-${{ github.sha }}-${{ runner.os }}
+          path: smp-server-fixtures/nix-develop-init.log
+
+      - name: Show environment info
+        working-directory: smp-server-fixtures
+        run: |
+          echo "=== Environment Info ==="
+          echo "GCC: $(which gcc) - $(gcc --version | head -1)"
+          echo "Python: $(which python) - $(python --version)"
+          echo "West: $(which west) - $(west --version)"
+          ccache -s || echo "ccache empty"
+
+      - name: Build native_sim serial fixture
+        working-directory: smp-server-fixtures
+        run: west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
+
+      - name: Run Twister Integration
+        working-directory: smp-server-fixtures
+        run: west twister -T apps -v --inline-logs --integration --short-build-path -O /tmp/twister-out
+
+      - name: Show ccache stats
+        run: ccache -s
+
+      # Upload native_sim serial fixture
+      - name: Upload native_sim serial fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: smp-server-fixture-serial-${{ github.sha }}-native_sim-nix
+          path: smp-server-fixtures/build/smp-server/zephyr/zephyr.exe
+
+      # Upload twister artifacts
+      - name: Upload twister artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smp-server-fixtures-nix-${{ github.sha }}-ubuntu
+          path: |
+            /tmp/twister-out/**/*.hex
+            /tmp/twister-out/**/*.bin
+            /tmp/twister-out/**/*.exe
+            /tmp/twister-out/**/*.elf
+            /tmp/twister-out/**/*.map
+            /tmp/twister-out/**/*.stat
+            /tmp/twister-out/**/zephyr.dts
+            /tmp/twister-out/**/build.log
+            /tmp/twister-out/twister.log
