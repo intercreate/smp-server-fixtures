@@ -58,6 +58,11 @@
           # This is critical for portable native_sim builds
           export PATH="/usr/bin:/usr/local/bin:$PATH"
 
+          # Explicitly set CC and CXX to system GCC FIRST
+          # This prevents CMake from caching Nix GCC during any operations
+          export CC=/usr/bin/gcc
+          export CXX=/usr/bin/g++
+
           # Check for system GCC (required for portable native_sim builds)
           if ! command -v gcc &> /dev/null; then
             echo "❌ Error: System GCC not found in PATH"
