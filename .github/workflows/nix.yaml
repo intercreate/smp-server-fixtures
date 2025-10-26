@@ -96,12 +96,43 @@ jobs:
           fi
 
       # Activate Nix development environment for all subsequent steps
+      # We export the environment ourselves instead of using nix-develop action
+      # to preserve the PATH order from our shellHook
       - name: Setup Nix development environment
-        uses: nicknovitski/nix-develop@v1
-        env:
-          NIX_FLAKE_DIR: ${{ github.workspace }}/smp-server-fixtures
-        with:
-          arguments: "./smp-server-fixtures"
+        working-directory: smp-server-fixtures
+        run: |
+          # Capture environment from nix develop after shellHook runs
+          nix develop --command bash -c 'env' > /tmp/nix-env.txt
+
+          # Export all environment variables to GITHUB_ENV
+          while IFS='=' read -r name value; do
+            # Skip empty lines and PATH (handle separately)
+            if [ -z "$name" ] || [ "$name" = "PATH" ]; then
+              continue
+            fi
+
+            # Handle multi-line values
+            if echo "$value" | grep -q $'\n'; then
+              delimiter="EOF_$(openssl rand -hex 8)"
+              echo "${name}<<${delimiter}" >> $GITHUB_ENV
+              echo "$value" >> $GITHUB_ENV
+              echo "${delimiter}" >> $GITHUB_ENV
+            else
+              echo "${name}=${value}" >> $GITHUB_ENV
+            fi
+          done < /tmp/nix-env.txt
+
+          # Export PATH by prepending nix develop PATH to GITHUB_PATH
+          # This preserves the order from shellHook (system paths first, then nix paths)
+          NIX_PATH=$(grep '^PATH=' /tmp/nix-env.txt | cut -d'=' -f2-)
+          IFS=':' read -ra PATH_ARRAY <<< "$NIX_PATH"
+          for path_entry in "${PATH_ARRAY[@]}"; do
+            if [ -d "$path_entry" ]; then
+              echo "$path_entry" >> $GITHUB_PATH
+            fi
+          done
+
+          echo "✅ Nix environment exported to subsequent steps"
 
       - run: cat smp-server-fixtures/nix-develop-init.log
         if: always()
