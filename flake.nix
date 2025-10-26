@@ -72,15 +72,31 @@
           fi
           echo "✓ Host GCC: $SYSTEM_GCC ($(gcc --version | head -1))"
 
+          # Find the flake directory by searching upward from PWD
+          FLAKE_DIR="$PWD"
+          while [ ! -f "$FLAKE_DIR/flake.nix" ] && [ "$FLAKE_DIR" != "/" ]; do
+            FLAKE_DIR="$(dirname "$FLAKE_DIR")"
+          done
+
+          if [ ! -f "$FLAKE_DIR/flake.nix" ]; then
+            echo "❌ Error: Could not find flake.nix"
+            exit 1
+          fi
+
+          # Workspace root is parent of flake directory
+          WORKSPACE_ROOT="$(dirname "$FLAKE_DIR")"
+          echo "✓ Flake directory: $FLAKE_DIR"
+          echo "✓ Workspace root: $WORKSPACE_ROOT"
+
           # Ensure we're in a west workspace
-          if [ ! -d "../.west" ]; then
-            echo "❌ Error: Not in a west workspace root. Directory ../.west not found."
+          if [ ! -d "$WORKSPACE_ROOT/.west" ]; then
+            echo "❌ Error: Not in a west workspace root. Directory $WORKSPACE_ROOT/.west not found."
             echo "   Please run 'west init' first or ensure you're in the correct directory."
             exit 1
           fi
 
           # Set up ccache with absolute path
-          export CCACHE_DIR="$(realpath ../.ccache)"
+          export CCACHE_DIR="$WORKSPACE_ROOT/.ccache"
           export CCACHE_MAXSIZE="2G"
           # Ignore -specs compiler flag variations for cross-compilation caching
           export CCACHE_IGNOREOPTIONS="-specs=* --specs=*"
@@ -89,12 +105,10 @@
           echo "✓ ccache directory: $CCACHE_DIR"
 
           # Set up Python virtual environment with uv
-          VENV_DIR="$(realpath ../.venv)"
+          VENV_DIR="$WORKSPACE_ROOT/.venv"
           if [ ! -d "$VENV_DIR" ]; then
             echo "📦 Creating Python 3.13 virtual environment with uv..."
-            cd .. || exit 1
-            uv venv --python 3.13 --seed || { echo "❌ Failed to create venv"; exit 1; }
-            cd - > /dev/null || exit 1
+            uv venv --python 3.13 --seed "$VENV_DIR" || { echo "❌ Failed to create venv"; exit 1; }
           fi
 
           # Activate the virtual environment
@@ -115,9 +129,9 @@
 
           # Install Python dependencies from committed pylock.toml if it exists
           # Otherwise fall back to west packages pip --install
-          if [ -f "pylock.toml" ]; then
+          if [ -f "$FLAKE_DIR/pylock.toml" ]; then
             echo "📦 Installing Python dependencies from pylock.toml..."
-            uv pip install --requirement pylock.toml || { echo "❌ Failed to install from pylock.toml"; exit 1; }
+            uv pip install --requirement "$FLAKE_DIR/pylock.toml" || { echo "❌ Failed to install from pylock.toml"; exit 1; }
           fi
 
           echo "📦 Installing Python dependencies via west..."
@@ -127,16 +141,17 @@
 
           # Always regenerate pylock.toml to keep it up-to-date
           echo "📝 Regenerating pylock.toml..."
-          uv pip freeze > requirements.tmp.in
-          uv pip compile requirements.tmp.in --format pylock.toml -o pylock.toml || { echo "❌ Failed to generate pylock.toml"; exit 1; }
-          rm requirements.tmp.in
-          echo "✓ pylock.toml regenerated"
+          uv pip freeze > "$FLAKE_DIR/requirements.tmp.in"
+          uv pip compile "$FLAKE_DIR/requirements.tmp.in" --format pylock.toml -o "$FLAKE_DIR/pylock.toml" \
+            --custom-compile-command "nix develop" || { echo "❌ Failed to generate pylock.toml"; exit 1; }
+          rm "$FLAKE_DIR/requirements.tmp.in"
+          echo "✓ pylock.toml regenerated at $FLAKE_DIR/pylock.toml"
 
           echo "🔧 Installing Zephyr SDK (arm-zephyr-eabi toolchain)..."
           west sdk install -t arm-zephyr-eabi || { echo "❌ Zephyr SDK installation failed"; exit 1; }
 
           # Set Zephyr environment variables with absolute paths
-          export ZEPHYR_BASE="$(realpath ../zephyr)"
+          export ZEPHYR_BASE="$WORKSPACE_ROOT/zephyr"
           echo "✓ ZEPHYR_BASE set to: $ZEPHYR_BASE"
 
           set +e  # Restore normal error handling for interactive shell
@@ -146,8 +161,6 @@
       {
         devShells.default = pkgs.mkShell {
           inherit buildInputs shellHook;
-
-          # Environment variables are set in shellHook to use absolute paths
         };
       }
     );
