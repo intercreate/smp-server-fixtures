@@ -12,6 +12,11 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(smp_svr)
 
+# Define PROCESSOR_NAME for native_sim to prevent warning in os_mgmt_processor.h
+if(BOARD STREQUAL "native_sim")
+  zephyr_compile_definitions(PROCESSOR_NAME="native_sim")
+endif()
+
 target_sources(app PRIVATE src/main.c)
 target_sources_ifdef(CONFIG_MCUMGR_TRANSPORT_BT app PRIVATE src/bluetooth.c)
 
