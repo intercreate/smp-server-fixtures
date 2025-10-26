@@ -1,0 +1,144 @@
+name: Build with Nix
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build with Nix (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: smp-server-fixtures
+          persist-credentials: false
+
+      # Install Nix with flakes enabled
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      # Cache the Nix store for fast dependency restoration
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # Install system GCC for portable native_sim builds
+      - name: Install system GCC multilib
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-multilib g++-multilib
+
+      # Cache the Zephyr SDK
+      - name: Cache Zephyr SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/zephyr-sdk-0.17.4
+          key: zephyr-sdk-0.17.4-${{ runner.os }}
+
+      # Cache the workspace (zephyr, modules, bootloader)
+      # Exclude the current repo to avoid caching build artifacts
+      - name: Cache Zephyr workspace
+        uses: actions/cache@v4
+        with:
+          path: |
+            zephyr
+            modules
+            bootloader
+            .west
+          key: zephyr-workspace-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/west.yml') }}
+          restore-keys: |
+            zephyr-workspace-${{ runner.os }}-
+
+      # Cache Python virtual environment
+      # Invalidates when west.yml changes (affects Python dependencies via west packages)
+      - name: Cache Python venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: python-venv-${{ runner.os }}-${{ hashFiles('smp-server-fixtures/west.yml') }}
+          restore-keys: |
+            python-venv-${{ runner.os }}-
+
+      # Cache ccache for faster C/C++ compilation
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      # Initialize west workspace if not cached
+      # Note: west update will be run later by nix develop shell hook
+      # This step just sets up the workspace structure
+      - name: Initialize west workspace
+        working-directory: smp-server-fixtures
+        run: |
+          if [ ! -d "../.west" ]; then
+            echo "Initializing west workspace..."
+            pip3 install west
+            cd ..
+            west init -l smp-server-fixtures
+          else
+            echo "West workspace already initialized (from cache)"
+          fi
+
+      # Enter Nix development environment and build
+      - name: Build with Nix environment
+        working-directory: smp-server-fixtures
+        run: |
+          nix develop --command bash -c '
+            set -e
+
+            # Show environment info
+            echo "=== Environment Info ==="
+            echo "GCC: $(which gcc) - $(gcc --version | head -1)"
+            echo "Python: $(which python) - $(python --version)"
+            echo "West: $(which west) - $(west --version)"
+            echo "Ccache: $(ccache -s || echo "empty")"
+            echo ""
+
+            # Build native_sim serial fixture
+            echo "=== Building native_sim serial fixture ==="
+            west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
+
+            # Run Twister integration tests
+            echo "=== Running Twister Integration Tests ==="
+            west twister -T apps -v --inline-logs --integration --short-build-path -O /tmp/twister-out
+
+            # Show ccache stats
+            echo ""
+            echo "=== Ccache Statistics ==="
+            ccache -s
+          '
+
+      # Upload native_sim serial fixture
+      - name: Upload native_sim serial fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: smp-server-fixture-serial-${{ github.sha }}-native_sim-nix
+          path: smp-server-fixtures/build/smp-server/zephyr/zephyr.exe
+
+      # Upload twister artifacts
+      - name: Upload twister artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smp-server-fixtures-nix-${{ github.sha }}-ubuntu
+          path: |
+            /tmp/twister-out/**/*.hex
+            /tmp/twister-out/**/*.bin
+            /tmp/twister-out/**/*.exe
+            /tmp/twister-out/**/*.elf
+            /tmp/twister-out/**/*.map
+            /tmp/twister-out/**/*.stat
+            /tmp/twister-out/**/zephyr.dts
+            /tmp/twister-out/**/build.log
+            /tmp/twister-out/twister.log
