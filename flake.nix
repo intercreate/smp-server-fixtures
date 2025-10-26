@@ -70,7 +70,7 @@
             echo "   System GCC should be in /usr/bin, not Nix store"
             exit 1
           fi
-          echo "✓ Using system GCC: $SYSTEM_GCC ($(gcc --version | head -1))"
+          echo "✓ Host GCC: $SYSTEM_GCC ($(gcc --version | head -1))"
 
           # Ensure we're in a west workspace
           if [ ! -d "../.west" ]; then
@@ -79,14 +79,18 @@
             exit 1
           fi
 
-          # Set up ccache
-          export CCACHE_DIR="../.ccache"
+          # Set up ccache with absolute path
+          export CCACHE_DIR="$(realpath ../.ccache)"
           export CCACHE_MAXSIZE="2G"
-          export USE_CCACHE=1
+          # Ignore -specs compiler flag variations for cross-compilation caching
+          export CCACHE_IGNOREOPTIONS="-specs=* --specs=*"
+          # Note: Don't set USE_CCACHE - Zephyr will auto-detect ccache if it's in PATH
           mkdir -p "$CCACHE_DIR" || { echo "❌ Failed to create ccache directory"; exit 1; }
+          echo "✓ ccache directory: $CCACHE_DIR"
 
           # Set up Python virtual environment with uv
-          if [ ! -d "../.venv" ]; then
+          VENV_DIR="$(realpath ../.venv)"
+          if [ ! -d "$VENV_DIR" ]; then
             echo "📦 Creating Python 3.13 virtual environment with uv..."
             cd .. || exit 1
             uv venv --python 3.13 --seed || { echo "❌ Failed to create venv"; exit 1; }
@@ -94,10 +98,11 @@
           fi
 
           # Activate the virtual environment
-          if [ -f "../.venv/bin/activate" ]; then
-            source ../.venv/bin/activate || { echo "❌ Failed to activate venv"; exit 1; }
+          if [ -f "$VENV_DIR/bin/activate" ]; then
+            source "$VENV_DIR/bin/activate" || { echo "❌ Failed to activate venv"; exit 1; }
+            echo "✓ Python venv: $VENV_DIR ($(python --version))"
           else
-            echo "❌ Error: Virtual environment not found at ../.venv"
+            echo "❌ Error: Virtual environment not found at $VENV_DIR"
             exit 1
           fi
 
