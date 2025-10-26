@@ -99,7 +99,7 @@ jobs:
       - name: Setup Nix development environment
         uses: nicknovitski/nix-develop@v1
         with:
-          working-directory: smp-server-fixtures
+          arguments: "./smp-server-fixtures"
 
       - name: Show environment info
         working-directory: smp-server-fixtures
