@@ -6,6 +6,10 @@
 # python
 .venv
 
+# nix
+nix-develop-init.log
+requirements.tmp.in
+
 # build
 /build*
 /twister-out*
@@ -13,3 +17,4 @@
 __pycache__/
 
 /flash.bin
+.nix-develop-log.txt

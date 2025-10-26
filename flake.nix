@@ -50,7 +50,9 @@
         shellHook = ''
           set -e  # Exit on any error
 
-          echo "🚀 Entering Zephyr development environment"
+          # Set up logging
+          # Log file is created in the flake directory (not checked in)
+          # We'll determine the log path after finding FLAKE_DIR
 
           # Prepend system paths to ensure system GCC is found first
           # This is critical for portable native_sim builds
@@ -59,7 +61,6 @@
           # Check for system GCC (required for portable native_sim builds)
           if ! command -v gcc &> /dev/null; then
             echo "❌ Error: System GCC not found in PATH"
-            echo "   For portable native_sim builds, you need system GCC installed."
             echo "   Install with: sudo apt install gcc gcc-multilib g++-multilib"
             exit 1
           fi
@@ -67,10 +68,8 @@
           SYSTEM_GCC=$(which gcc)
           if [[ "$SYSTEM_GCC" == *"/nix/store"* ]]; then
             echo "❌ Error: GCC is still pointing to Nix store: $SYSTEM_GCC"
-            echo "   System GCC should be in /usr/bin, not Nix store"
             exit 1
           fi
-          echo "✓ Host GCC: $SYSTEM_GCC ($(gcc --version | head -1))"
 
           # Find the flake directory by searching upward from PWD
           FLAKE_DIR="$PWD"
@@ -85,8 +84,13 @@
 
           # Workspace root is parent of flake directory
           WORKSPACE_ROOT="$(dirname "$FLAKE_DIR")"
-          echo "✓ Flake directory: $FLAKE_DIR"
-          echo "✓ Workspace root: $WORKSPACE_ROOT"
+
+          # Set up log file for verbose output
+          INIT_LOG="$FLAKE_DIR/nix-develop-init.log"
+          echo "=== Nix develop shell initialization: $(date) ===" > "$INIT_LOG"
+          echo "Workspace root: $WORKSPACE_ROOT" >> "$INIT_LOG"
+
+          echo "🚀 Zephyr environment (log: $INIT_LOG)"
 
           # Ensure we're in a west workspace
           if [ ! -d "$WORKSPACE_ROOT/.west" ]; then
@@ -102,7 +106,6 @@
           export CCACHE_IGNOREOPTIONS="-specs=* --specs=*"
           # Note: Don't set USE_CCACHE - Zephyr will auto-detect ccache if it's in PATH
           mkdir -p "$CCACHE_DIR" || { echo "❌ Failed to create ccache directory"; exit 1; }
-          echo "✓ ccache directory: $CCACHE_DIR"
 
           # Set up Python virtual environment with uv
           VENV_DIR="$WORKSPACE_ROOT/.venv"
@@ -114,45 +117,32 @@
           # Activate the virtual environment
           if [ -f "$VENV_DIR/bin/activate" ]; then
             source "$VENV_DIR/bin/activate" || { echo "❌ Failed to activate venv"; exit 1; }
-            echo "✓ Python venv: $VENV_DIR ($(python --version))"
           else
             echo "❌ Error: Virtual environment not found at $VENV_DIR"
             exit 1
           fi
 
-          echo "📦 Installing west..."
-          pip install west || { echo "❌ Failed to install west"; exit 1; }
-
-          # Run west update to sync dependencies
-          echo "🔄 Running west update..."
-          west update || { echo "❌ west update failed"; exit 1; }
+          pip install west >> "$INIT_LOG" 2>&1 || { echo "❌ Failed to install west (see $INIT_LOG)"; exit 1; }
+          west update >> "$INIT_LOG" 2>&1 || { echo "❌ west update failed (see $INIT_LOG)"; exit 1; }
 
           # Install Python dependencies from committed pylock.toml if it exists
-          # Otherwise fall back to west packages pip --install
           if [ -f "$FLAKE_DIR/pylock.toml" ]; then
-            echo "📦 Installing Python dependencies from pylock.toml..."
-            uv pip install --requirement "$FLAKE_DIR/pylock.toml" || { echo "❌ Failed to install from pylock.toml"; exit 1; }
+            uv pip install --requirement "$FLAKE_DIR/pylock.toml" >> "$INIT_LOG" 2>&1 || { echo "❌ Failed to install from pylock.toml (see $INIT_LOG)"; exit 1; }
           fi
 
-          echo "📦 Installing Python dependencies via west..."
-          west zephyr-export || { echo "❌ west zephyr-export failed"; exit 1; }
-          west packages pip --install || { echo "❌ west packages pip --install failed"; exit 1; }
-
+          west zephyr-export >> "$INIT_LOG" 2>&1 || { echo "❌ west zephyr-export failed (see $INIT_LOG)"; exit 1; }
+          west packages pip --install >> "$INIT_LOG" 2>&1 || { echo "❌ west packages pip --install failed (see $INIT_LOG)"; exit 1; }
 
           # Always regenerate pylock.toml to keep it up-to-date
-          echo "📝 Regenerating pylock.toml..."
-          uv pip freeze > "$FLAKE_DIR/requirements.tmp.in"
+          uv pip freeze > "$FLAKE_DIR/requirements.tmp.in" 2>> "$INIT_LOG"
           uv pip compile "$FLAKE_DIR/requirements.tmp.in" --format pylock.toml -o "$FLAKE_DIR/pylock.toml" \
-            --custom-compile-command "nix develop" || { echo "❌ Failed to generate pylock.toml"; exit 1; }
+            --custom-compile-command "nix develop" >> "$INIT_LOG" 2>&1 || { echo "❌ Failed to generate pylock.toml (see $INIT_LOG)"; exit 1; }
           rm "$FLAKE_DIR/requirements.tmp.in"
-          echo "✓ pylock.toml regenerated at $FLAKE_DIR/pylock.toml"
 
-          echo "🔧 Installing Zephyr SDK (arm-zephyr-eabi toolchain)..."
-          west sdk install -t arm-zephyr-eabi || { echo "❌ Zephyr SDK installation failed"; exit 1; }
+          west sdk install -t arm-zephyr-eabi >> "$INIT_LOG" 2>&1 || { echo "❌ Zephyr SDK installation failed (see $INIT_LOG)"; exit 1; }
 
           # Set Zephyr environment variables with absolute paths
           export ZEPHYR_BASE="$WORKSPACE_ROOT/zephyr"
-          echo "✓ ZEPHYR_BASE set to: $ZEPHYR_BASE"
 
           set +e  # Restore normal error handling for interactive shell
         '';
