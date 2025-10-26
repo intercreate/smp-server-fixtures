@@ -98,6 +98,8 @@ jobs:
       # Activate Nix development environment for all subsequent steps
       - name: Setup Nix development environment
         uses: nicknovitski/nix-develop@v1
+        env:
+          NIX_FLAKE_DIR: ${{ github.workspace }}/smp-server-fixtures
         with:
           arguments: "./smp-server-fixtures"
 

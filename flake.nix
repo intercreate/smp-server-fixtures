@@ -71,15 +71,22 @@
             exit 1
           fi
 
-          # Find the flake directory by searching upward from PWD
-          FLAKE_DIR="$PWD"
-          while [ ! -f "$FLAKE_DIR/flake.nix" ] && [ "$FLAKE_DIR" != "/" ]; do
-            FLAKE_DIR="$(dirname "$FLAKE_DIR")"
-          done
+          # Find the flake directory
+          # First check if NIX_FLAKE_DIR is set (for CI/automated use)
+          if [ -n "$NIX_FLAKE_DIR" ] && [ -f "$NIX_FLAKE_DIR/flake.nix" ]; then
+            FLAKE_DIR="$NIX_FLAKE_DIR"
+          else
+            # Search upward from PWD
+            FLAKE_DIR="$PWD"
+            while [ ! -f "$FLAKE_DIR/flake.nix" ] && [ "$FLAKE_DIR" != "/" ]; do
+              FLAKE_DIR="$(dirname "$FLAKE_DIR")"
+            done
 
-          if [ ! -f "$FLAKE_DIR/flake.nix" ]; then
-            echo "❌ Error: Could not find flake.nix"
-            exit 1
+            if [ ! -f "$FLAKE_DIR/flake.nix" ]; then
+              echo "❌ Error: Could not find flake.nix"
+              echo "   Set NIX_FLAKE_DIR=/path/to/flake or run from within the flake directory"
+              exit 1
+            fi
           fi
 
           # Workspace root is parent of flake directory
