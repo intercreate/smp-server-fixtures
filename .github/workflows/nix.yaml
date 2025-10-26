@@ -123,10 +123,16 @@ jobs:
 
       - name: Build native_sim serial fixture
         working-directory: smp-server-fixtures
+        env:
+          CC: /usr/bin/gcc
+          CXX: /usr/bin/g++
         run: west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
 
       - name: Run Twister Integration
         working-directory: smp-server-fixtures
+        env:
+          CC: /usr/bin/gcc
+          CXX: /usr/bin/g++
         run: west twister -T apps -v --inline-logs --integration --short-build-path -O /tmp/twister-out
 
       - name: Show ccache stats
