@@ -105,9 +105,12 @@ jobs:
           nix develop --command bash -c 'env' > /tmp/nix-env.txt
 
           # Export all environment variables to GITHUB_ENV
+          # Skip Nix-internal variables that shouldn't be exported
+          SKIP_VARS="shellHook|buildPhase|buildInputs|nativeBuildInputs|propagatedBuildInputs|depsHostHost|depsTargetTarget|depsBuildBuild|depsBuildTarget|phases|outputs|stdenv|builder|__structuredAttrs|HOST_PATH"
+
           while IFS='=' read -r name value; do
-            # Skip empty lines and PATH (handle separately)
-            if [ -z "$name" ] || [ "$name" = "PATH" ]; then
+            # Skip empty lines, PATH (handle separately), and Nix-internal variables
+            if [ -z "$name" ] || [ "$name" = "PATH" ] || echo "$name" | grep -qE "^($SKIP_VARS)"; then
               continue
             fi
 
@@ -122,11 +125,18 @@ jobs:
             fi
           done < /tmp/nix-env.txt
 
-          # Export PATH by prepending nix develop PATH to GITHUB_PATH
-          # This preserves the order from shellHook (system paths first, then nix paths)
+          # Export PATH preserving the order from nix develop
+          # The PATH from nix develop already has:
+          # 1. System paths (/usr/bin, /usr/local/bin) prepended by shellHook
+          # 2. venv bin directory from activation
+          # 3. Nix store paths
+          # We write them to GITHUB_PATH in REVERSE order because GitHub prepends
           NIX_PATH=$(grep '^PATH=' /tmp/nix-env.txt | cut -d'=' -f2-)
           IFS=':' read -ra PATH_ARRAY <<< "$NIX_PATH"
-          for path_entry in "${PATH_ARRAY[@]}"; do
+
+          # Write in reverse order so GitHub's prepending results in correct order
+          for (( i=${#PATH_ARRAY[@]}-1; i>=0; i-- )); do
+            path_entry="${PATH_ARRAY[$i]}"
             if [ -d "$path_entry" ]; then
               echo "$path_entry" >> $GITHUB_PATH
             fi
