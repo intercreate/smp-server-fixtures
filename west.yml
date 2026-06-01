@@ -10,7 +10,7 @@ manifest:
   projects:
     - name: zephyr
       remote: zephyrproject-rtos
-      revision: 8a72d776c5af6522478155adc91a5f4edb2794e3
+      revision: v4.4.0
       import:
         name-allowlist:
           - cmsis_6
@@ -21,4 +21,5 @@ manifest:
           - littlefs
           - mbedtls
           - mcuboot
+          - tf-psa-crypto
           - zcbor

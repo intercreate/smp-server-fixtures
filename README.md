@@ -1,43 +1,65 @@
-# Simple Management Protocol (SMP) Server Fixtures
+# SMP Server Fixtures
 
-This repository provides SMP server fixtures for testing SMP client tools like [smpmgr](https://github.com/intercreate/smpmgr) and [smpclient](https://github.com/intercreate/smpclient) without physical hardware, enabling integration tests in CI environments.
+SMP (MCUmgr) **server** fixtures for testing SMP client transports —
+[smpclient](https://github.com/intercreate/smpclient) and
+[smpmgr](https://github.com/intercreate/smpmgr) — without physical hardware.
 
-## Available Fixtures
+Each fixture enables every MCUmgr command group available on its target, so a
+single fixture can exercise any command.
 
-### Serial Transport - Native Simulator
+## Fixtures
 
-The `smp_server.fixture.serial.native_sim` fixture provides a Zephyr SMP server that runs natively on Linux and creates a pseudo-terminal (PTY) device for serial communication.
+| Fixture | Target | Transport | Artifact |
+| --- | --- | --- | --- |
+| `serial.native_sim` | native_sim | serial (host PTY) | `.exe` |
+| `serial_raw.native_sim` | native_sim | raw UART | `.exe` |
+| `udp.native_sim` | native_sim | UDP, `127.0.0.1:1337` | `.exe` |
+| `serial.qemu_cortex_m0` | QEMU | serial (host PTY) + DFU | `.hex` |
+| `serial.nrf52840dk` | hardware | serial + DFU | `.hex`, `.signed.bin` |
+| `ble.nrf52840dk` | hardware | BLE + DFU | `.hex`, `.signed.bin` |
 
-#### Building the Fixture
+The native_sim and QEMU fixtures run in software; the hardware fixtures are
+images to flash on a bench.
 
-```bash
-west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
+## Get a fixture
+
+Prebuilt fixtures are attached to the rolling
+[`latest` release](https://github.com/intercreate/smp-server-fixtures/releases/tag/latest)
+as `smp_server_<zephyr-version>_<fixture>.{exe,hex,signed.bin}` with a
+`SHA256SUMS`. Download the one you need, or build locally (below).
+
+## Use a fixture
+
+**Serial (native_sim)** prints its PTY path on boot:
+
+```console
+$ ./smp_server_<ver>_serial_native_sim.exe
+uart connected to pseudotty: /dev/pts/N
+$ smpmgr --port /dev/pts/N os echo hello
 ```
 
-#### Running and Testing the Fixture
+**UDP (native_sim)** binds a host socket:
 
-1. Run the fixture executable:
-   ```bash
-   ./build/smp-server/zephyr/zephyr.exe
-   ```
+```console
+$ ./smp_server_<ver>_udp_native_sim.exe &
+$ smpmgr --ip 127.0.0.1 os echo hello
+```
 
-2. The output will show the PTY device path:
-   ```
-   uart connected to pseudotty: /dev/pts/4
-   *** Booting Zephyr OS build v4.2.0-6166-g8a72d776c5af ***
-   [00:00:00.000,000] <inf> smp_sample: build time: Oct 19 2025 14:03:46
-   ```
+**QEMU (DFU)** boots a merged MCUboot + app image with its console on a PTY:
 
-3. In another terminal, connect using smpmgr or smpclient:
-   ```bash
-   # Example using smpmgr (replace /dev/pts/4 with your actual PTY path)
-   smpmgr --port /dev/pts/4 os echo hello
-   ```
+```console
+$ qemu-system-arm -cpu cortex-m0 -machine microbit -nographic \
+    -chardev pty,id=con,mux=on -serial chardev:con \
+    -device loader,file=smp_server_<ver>_serial_qemu_cortex_m0.hex
+char device redirected to /dev/pts/N
+$ smpmgr --port /dev/pts/N image state-read
+```
 
-4. Stop the fixture with `Ctrl+C`
+## Build locally
 
-#### Notes
+```bash
+west twister -T apps --build-only -p native_sim -p qemu_cortex_m0 -p nrf52840dk/nrf52840
+```
 
-- The PTY device path (`/dev/pts/X`) will change each time you run the fixture
-- This fixture is build-only in CI and is intended for local testing or integration tests in client tool repositories
-- MCUboot is disabled (`CONFIG_IMG_MANAGER=n`, `SB_CONFIG_BOOTLOADER_NONE=y`) for simplicity
+native_sim builds 32-bit; install `gcc-multilib` first. Fixtures are defined in
+[`apps/smp-server/sample.yaml`](apps/smp-server/sample.yaml).

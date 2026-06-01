@@ -2,77 +2,120 @@ name: Build
 
 on:
   push:
+    branches: [main]
+    tags: ['*']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Build apps and tests
+    name: Build ${{ matrix.leg }} fixtures
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          # Host toolchain. native_sim is 32-bit (the 64-bit PTY UART RX is
+          # broken on v4.4.0), so it needs gcc-multilib.
+          - leg: native_sim
+            toolchains: ""
+            platforms: native_sim
+          # Zephyr SDK ARM toolchain: the runnable QEMU DFU fixture and the
+          # build-only hardware images.
+          - leg: arm
+            toolchains: arm-zephyr-eabi
+            platforms: qemu_cortex_m0 nrf52840dk/nrf52840
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          path: smp-server-fixtures
+          path: working_directory
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install 32-bit host toolchain for native_sim
+        if: matrix.leg == 'native_sim'
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
+
+      - uses: actions/setup-python@v6
         with:
-          python-version: 3.12
+          python-version: '3.13'
 
-      - name: Setup Zephyr project
-        uses: zephyrproject-rtos/action-zephyr-setup@v1
+      - uses: zephyrproject-rtos/action-zephyr-setup@v1
         with:
-          app-path: smp-server-fixtures
-          toolchains: arm-zephyr-eabi
-          ccache-cache-key: ${{ matrix.os }}
+          app-path: working_directory
+          toolchains: ${{ matrix.toolchains }}
+          ccache-cache-key: ${{ matrix.leg }}
 
-      - name: Build native_sim serial fixture
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: smp-server-fixtures
-        shell: bash
-        run: west build -b native_sim apps/smp-server -T smp_server.fixture.serial.native_sim
-
-      - name: Upload native_sim serial fixture
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: smp-server-fixture-serial-${{ github.sha }}-native_sim
-          path: smp-server-fixtures/build/smp-server/zephyr/zephyr.exe
-
-      - name: Run Twister Integration
-        id: build
-        working-directory: smp-server-fixtures
-        shell: bash
+      - name: Build fixtures (Twister, all configs for this leg)
+        working-directory: working_directory
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            EXTRA_TWISTER_FLAGS="--short-build-path -O/tmp/twister-out"
-            TWISTER_OUT_DIR="/tmp/twister-out"
-          else
-            TWISTER_OUT_DIR="smp-server-fixtures/twister-out"
-          fi
-          west twister -T apps -v --inline-logs --integration $EXTRA_TWISTER_FLAGS
-          echo "twister-out-dir=$TWISTER_OUT_DIR" >> $GITHUB_OUTPUT
+          args=""
+          for p in ${{ matrix.platforms }}; do args="$args -p $p"; done
+          west twister -T apps --build-only --inline-logs -O twister-out $args
 
-      - name: Upload twister artifacts
-        uses: actions/upload-artifact@v4
+      - name: Collect fixtures with canonical names
+        working-directory: working_directory
+        run: |
+          ver=$(west list zephyr --format='{revision}'); ver=${ver#v}
+          mkdir -p fixtures
+          while IFS= read -r d; do
+            slug=$(basename "$d" | sed 's/^smp_server\.fixture\.//; s/\./_/g')
+            base="fixtures/smp_server_${ver}_${slug}"
+            # native_sim/QEMU: runnable executable / merged image
+            [ -f "$d/zephyr/zephyr.exe" ] && cp "$d/zephyr/zephyr.exe" "${base}.exe"
+            hex=$(ls "$d"/merged_*.hex 2>/dev/null | head -1)
+            [ -n "$hex" ] && cp "$hex" "${base}.hex"
+            # hardware DFU: signed application image for upload via the img group
+            signed="$d/smp-server/zephyr/zephyr.signed.bin"
+            [ -f "$signed" ] && cp "$signed" "${base}.signed.bin"
+          done < <(find twister-out -type d -name 'smp_server.fixture.*')
+          ls -l fixtures
+
+      - uses: actions/upload-artifact@v7
         with:
-          name: smp-server-fixtures-${{ github.sha }}-${{ matrix.os }}
-          path: |
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.hex
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.bin
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.exe
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.elf
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.map
-            ${{ steps.build.outputs.twister-out-dir }}/**/*.stat
-            ${{ steps.build.outputs.twister-out-dir }}/**/zephyr.dts
-            ${{ steps.build.outputs.twister-out-dir }}/**/build.log
-            ${{ steps.build.outputs.twister-out-dir }}/twister.log
+          name: fixtures-${{ matrix.leg }}
+          path: working_directory/fixtures/*
+          if-no-files-found: error
+
+      - name: Upload Twister logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: twister-logs-${{ matrix.leg }}
+          path: working_directory/twister-out/**/build.log
+
+  release:
+    name: Publish rolling 'latest' release
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: artifacts
+        run: sha256sum * > SHA256SUMS
+
+      - run: gh release delete latest --cleanup-tag -y || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest SMP Server Fixtures
+          body: Built from ${{ github.sha }}.
+          make_latest: true
+          target_commitish: ${{ github.sha }}
+          files: artifacts/*
