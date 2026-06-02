@@ -348,6 +348,40 @@ tests:
         grp_enum.conf"
 
   # ---------------------------------------------------------------------------
+  # Roomier emulated MCU: mps2/an385 (QEMU Cortex-M3, 4 MB SRAM). A flash
+  # overlay (boards/mps2_an385.overlay) gives a writable littlefs storage
+  # partition, so a single runnable emulated image hosts every non-img group,
+  # fs file round-trips, and large buffers -- the RAM-heavy combination the
+  # nRF51 QEMU cannot. The board conf keeps the interactive shell off uart0.
+  # ---------------------------------------------------------------------------
+  smp_server.fixture.serial.mps2_an385:
+    sysbuild: false
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        grp_os.conf;
+        grp_fs.conf;
+        grp_shell.conf;
+        grp_stat.conf;
+        grp_settings.conf;
+        grp_enum.conf;
+        grp_zbasic.conf"
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=2048
+
+  smp_server.fixture.shell.mps2_an385:
+    sysbuild: false
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="shell.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+
+  # ---------------------------------------------------------------------------
   # MCUboot serial recovery: the bootloader's own SMP server (separate from the
   # app's), entered by waiting for DFU at boot. Drive image upload against the
   # bootloader; ships the matching signed.bin to upload. Build-only hardware

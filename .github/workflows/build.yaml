@@ -84,6 +84,9 @@ jobs:
               cp "$hex" "${base}.merged.hex"; artifact="$(basename "${base}.merged.hex")"
             elif [ -z "$artifact" ] && [ -f "$d/zephyr/zephyr.hex" ]; then
               cp "$d/zephyr/zephyr.hex" "${base}.hex"; artifact="$(basename "${base}.hex")"
+            elif [ -z "$artifact" ] && [ -f "$d/zephyr/zephyr.elf" ]; then
+              # Emulated targets that emit no .hex (e.g. mps2) ship the ELF; QEMU runs it with -kernel.
+              cp "$d/zephyr/zephyr.elf" "${base}.elf"; artifact="$(basename "${base}.elf")"
             fi
             signed="$d/smp-server/zephyr/zephyr.signed.bin"
             [ -f "$signed" ] && cp "$signed" "${base}.signed.bin"
@@ -119,8 +122,17 @@ jobs:
             recovery=false; [ "$config" = serial_recovery ] && recovery=true
             qemu=""
             case "$target" in
-              qemu_cortex_m0) qemu="qemu-system-arm -cpu cortex-m0 -machine microbit -nographic -chardev socket,id=con,host=127.0.0.1,port=<PORT>,server=on,wait=off -serial chardev:con -monitor none -device loader,file=${artifact}";;
+              qemu_cortex_m0) qcpu=cortex-m0; qmach=microbit;;
+              mps2_an385)     qcpu=cortex-m3; qmach=mps2-an385;;
+              *)              qcpu=""; qmach="";;
             esac
+            if [ -n "$qmach" ]; then
+              case "$artifact" in
+                *.elf) qload="-kernel ${artifact}";;
+                *)     qload="-device loader,file=${artifact}";;
+              esac
+              qemu="qemu-system-arm -cpu ${qcpu} -machine ${qmach} -nographic -chardev socket,id=con,host=127.0.0.1,port=<PORT>,server=on,wait=off -serial chardev:con -monitor none ${qload}"
+            fi
             run=""; [ -f "${base}.exe" ] && run="./${artifact}"
             jq -n \
               --arg artifact "$artifact" --arg target "$target" --arg config "$config" \

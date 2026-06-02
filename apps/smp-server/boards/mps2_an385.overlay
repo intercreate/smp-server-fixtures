@@ -1,0 +1,39 @@
+/*
+ * mps2/an385 (QEMU Cortex-M3, 4 MB SRAM) -- a roomy emulated MCU target.
+ * Routes MCUmgr to uart0 and lays out the flash simulator with an MCUboot
+ * partition table (boot/slot0/slot1) plus a littlefs storage partition. The
+ * simulator is RAM-backed and writable in QEMU; MCUboot uses RAM_LOAD (the
+ * simulator is not memory-mapped for XIP), reading slot0 into SRAM to run.
+ */
+/ {
+	chosen {
+		zephyr,uart-mcumgr = &uart0;
+	};
+};
+
+/delete-node/ &storage_partition;
+
+&flash_sim0 {
+	reg = <0x00000000 0x00200000>;	/* 2 MB */
+	erase-block-size = <4096>;
+	write-block-size = <4>;
+
+	partitions {
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 0x00010000>;	/* 64 KB */
+		};
+		slot0_partition: partition@10000 {
+			label = "image-0";
+			reg = <0x00010000 0x00080000>;	/* 512 KB */
+		};
+		slot1_partition: partition@90000 {
+			label = "image-1";
+			reg = <0x00090000 0x00080000>;	/* 512 KB */
+		};
+		storage_partition: partition@110000 {
+			label = "storage";
+			reg = <0x00110000 0x00040000>;	/* 256 KB */
+		};
+	};
+};

@@ -17,9 +17,10 @@ ships a machine-readable [`manifest.json`](#manifest) describing every fixture.
 | **`serial_bigrx`** | native_sim | Default buffers but a large UART RX pool — receives full multi-fragment messages the small default pool would drop. |
 | **`serial_line512`** | native_sim | Accepts long (512 B) serial frame lines, for non-default client line lengths. |
 | **`serial_noparams`** | native_sim | MCUmgr params command disabled — exercises the client's fallback when `buf_size` can't be read. |
-| **`shell`** | native_sim | SMP over the Zephyr shell — SMP shares the UART with the shell prompt and logs. |
+| **`shell`** | native_sim, mps2 | SMP over the Zephyr shell — SMP shares the UART with the shell prompt and logs. |
 | **`udp6`** | native_sim | UDP over IPv6 (`[::1]:1337`). |
 | **`serial_fs`, `udp_fs`** | native_sim | littlefs mounted at `/lfs1` for fs-group file upload/download. |
+| **`serial`** (roomy) | mps2 | Cortex-M3, 4 MB SRAM via a flash overlay: one runnable image with **every** non-img group, fs file round-trips, and large buffers. |
 | **`serial`** | qemu_cortex_m0 | Merged MCUboot + signed app — exercises the img (DFU) group under emulation. |
 | **`serial`, `ble`, `serial_recovery`** | nrf52840dk | Build-only images for a hardware bench. `serial_recovery` is MCUboot serial recovery (the bootloader's own SMP server). |
 
@@ -27,10 +28,10 @@ The authoritative, per-release list (with each fixture's transport, buffers,
 groups, and launch command) is the [manifest](#manifest). Fixtures are defined
 in [`apps/smp-server/sample.yaml`](apps/smp-server/sample.yaml).
 
-> **Not provided:** a *runnable* (emulated) MCUboot serial-recovery fixture — it
-> doesn't fit the only MCUboot-capable QEMU target (nRF51, 16 KB RAM), so
-> recovery ships build-only for hardware. SMP-over-shell ships native_sim only
-> (it overflows the nRF51 QEMU).
+> **MCUboot serial recovery** currently ships build-only for hardware. The
+> nRF51 QEMU (16 KB RAM) cannot host it; a runnable emulated recovery image on
+> mps2 (via MCUboot RAM_LOAD + a retained-memory boot-mode entry) is in
+> progress.
 
 ## Get a fixture
 
