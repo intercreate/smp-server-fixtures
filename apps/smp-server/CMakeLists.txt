@@ -9,6 +9,7 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(smp_svr)
 
-set(SMP_SVR $ENV{ZEPHYR_BASE}/samples/subsys/mgmt/mcumgr/smp_svr)
+# ZEPHYR_BASE is set by find_package(Zephyr) above.
+set(SMP_SVR ${ZEPHYR_BASE}/samples/subsys/mgmt/mcumgr/smp_svr)
 target_sources(app PRIVATE ${SMP_SVR}/src/main.c)
 target_sources_ifdef(CONFIG_MCUMGR_TRANSPORT_BT app PRIVATE ${SMP_SVR}/src/bluetooth.c)

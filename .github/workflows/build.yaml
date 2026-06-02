@@ -62,11 +62,15 @@ jobs:
       - name: Collect fixtures with canonical names
         working-directory: working_directory
         run: |
+          # zephyr_<zephyr-version>_smp_server_<8-char-fixtures-SHA>_<target>_<config>.<ext>
           ver=$(west list zephyr --format='{revision}'); ver=${ver#v}
+          sha=${GITHUB_SHA::8}
           mkdir -p fixtures
           while IFS= read -r d; do
-            slug=$(basename "$d" | sed 's/^smp_server\.fixture\.//; s/\./_/g')
-            base="fixtures/smp_server_${ver}_${slug}"
+            rest=$(basename "$d" | sed 's/^smp_server\.fixture\.//')  # <config>.<target>
+            config=${rest%.*}
+            target=${rest#*.}
+            base="fixtures/zephyr_${ver}_smp_server_${sha}_${target}_${config}"
             # native_sim/QEMU: runnable executable / merged image
             [ -f "$d/zephyr/zephyr.exe" ] && cp "$d/zephyr/zephyr.exe" "${base}.exe"
             hex=$(ls "$d"/merged_*.hex 2>/dev/null | head -1)
@@ -81,6 +85,7 @@ jobs:
         with:
           name: fixtures-${{ matrix.leg }}
           path: working_directory/fixtures/*
+          archive: false # upload bare files, not a zip
           if-no-files-found: error
 
       - name: Upload Twister logs on failure

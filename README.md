@@ -25,15 +25,15 @@ images to flash on a bench.
 
 Prebuilt fixtures are attached to the rolling
 [`latest` release](https://github.com/intercreate/smp-server-fixtures/releases/tag/latest)
-as `smp_server_<zephyr-version>_<fixture>.{exe,hex,signed.bin}` with a
-`SHA256SUMS`. Download the one you need, or build locally (below).
+as `zephyr_<zephyr-version>_smp_server_<git-sha>_<target>_<config>.{exe,hex,signed.bin}`
+with a `SHA256SUMS`. Download the one you need, or build locally (below).
 
 ## Use a fixture
 
 **Serial (native_sim)** prints its PTY path on boot:
 
 ```console
-$ ./smp_server_<ver>_serial_native_sim.exe
+$ ./zephyr_*_native_sim_serial.exe
 uart connected to pseudotty: /dev/pts/N
 $ smpmgr --port /dev/pts/N os echo hello
 ```
@@ -41,16 +41,17 @@ $ smpmgr --port /dev/pts/N os echo hello
 **UDP (native_sim)** binds a host socket:
 
 ```console
-$ ./smp_server_<ver>_udp_native_sim.exe &
+$ ./zephyr_*_native_sim_udp.exe &
 $ smpmgr --ip 127.0.0.1 os echo hello
 ```
 
 **QEMU (DFU)** boots a merged MCUboot + app image with its console on a PTY:
 
 ```console
+$ HEX=$(ls zephyr_*_qemu_cortex_m0_serial.hex)
 $ qemu-system-arm -cpu cortex-m0 -machine microbit -nographic \
     -chardev pty,id=con,mux=on -serial chardev:con \
-    -device loader,file=smp_server_<ver>_serial_qemu_cortex_m0.hex
+    -device loader,file="$HEX"
 char device redirected to /dev/pts/N
 $ smpmgr --port /dev/pts/N image state-read
 ```
