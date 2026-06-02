@@ -9,10 +9,14 @@ common:
   build_only: true
   tags: smp_server fixture
 tests:
+  # ---------------------------------------------------------------------------
+  # Base fixtures: every MCUmgr command group the target can host, default
+  # buffers. The broadest fixtures for exercising specific commands.
+  # ---------------------------------------------------------------------------
+
   # native_sim: 32-bit on purpose -- the 64-bit native_sim PTY UART does not
   # deliver RX to the MCUmgr transport on v4.4.0 (boots but never answers SMP).
-  # No MCUboot, so no img group. littlefs (fs group) is omitted: littlefs_fs.c
-  # hits a -Werror on native_sim in v4.4.0; the fs group is exercised on hardware.
+  # No MCUboot, so no img group; fs uses littlefs on the flash simulator.
   smp_server.fixture.serial.native_sim:
     sysbuild: false
     platform_allow: [native_sim]
@@ -21,6 +25,7 @@ tests:
       - >-
         EXTRA_CONF_FILE="serial.conf;
         grp_os.conf;
+        grp_fs.conf;
         grp_shell.conf;
         grp_stat.conf;
         grp_settings.conf;
@@ -50,6 +55,7 @@ tests:
         EXTRA_CONF_FILE="udp.conf;
         nsos.conf;
         grp_os.conf;
+        grp_fs.conf;
         grp_shell.conf;
         grp_stat.conf;
         grp_settings.conf;
@@ -111,3 +117,258 @@ tests:
         grp_img.conf"
       - SB_CONFIG_BOOTLOADER_MCUBOOT=y
       - SB_CONFIG_MERGED_HEX_FILES=y
+
+  # ---------------------------------------------------------------------------
+  # Buffer-size matrix: sweep CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE to validate
+  # smpclient's Auto math (mtu == buf_size, line_buffers = buf_size //
+  # line_length) and full fragmentation + reassembly at each size, including a
+  # non-multiple of the client line length (400) and an edge below it (96).
+  # native_sim serial bakes in a generous UART RX pool (bigrx.conf) so
+  # multi-fragment messages arrive without the PTY-burst fragment drop.
+  # ---------------------------------------------------------------------------
+  smp_server.fixture.serial_buf96.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - &nsim_serial_core >-
+        EXTRA_CONF_FILE="serial.conf;
+        bigrx.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=96
+
+  smp_server.fixture.serial_buf128.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_serial_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=128
+
+  smp_server.fixture.serial_buf256.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_serial_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=256
+
+  smp_server.fixture.serial_buf400.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_serial_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=400
+
+  smp_server.fixture.serial_buf512.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_serial_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=512
+
+  smp_server.fixture.serial_buf1024.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_serial_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=1024
+
+  smp_server.fixture.serial_buf2048.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_serial_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=2048
+
+  smp_server.fixture.udp_buf256.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - &nsim_udp_core >-
+        EXTRA_CONF_FILE="udp.conf;
+        nsos.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=256
+
+  smp_server.fixture.udp_buf1024.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_udp_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=1024
+
+  smp_server.fixture.udp_buf2048.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - *nsim_udp_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=2048
+
+  # QEMU serial buffer points (plain image, no MCUboot -- isolates transport
+  # buffer behavior on an emulated MCU whose UART paces the link).
+  smp_server.fixture.serial_buf256.qemu_cortex_m0:
+    sysbuild: false
+    platform_allow: [qemu_cortex_m0]
+    integration_platforms: [qemu_cortex_m0]
+    extra_args:
+      - &qemu_serial_core >-
+        EXTRA_CONF_FILE="serial.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=256
+
+  smp_server.fixture.serial_buf512.qemu_cortex_m0:
+    sysbuild: false
+    platform_allow: [qemu_cortex_m0]
+    integration_platforms: [qemu_cortex_m0]
+    extra_args:
+      - *qemu_serial_core
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=512
+
+  # ---------------------------------------------------------------------------
+  # Transport / parameter behavior variants.
+  # ---------------------------------------------------------------------------
+
+  # Larger UART RX pool, default netbuf: a drop-in serial.native_sim that can
+  # receive full multi-fragment messages (smpclient #73/#81). Every group on.
+  smp_server.fixture.serial_bigrx.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        bigrx.conf;
+        grp_os.conf;
+        grp_fs.conf;
+        grp_shell.conf;
+        grp_stat.conf;
+        grp_settings.conf;
+        grp_enum.conf;
+        grp_zbasic.conf"
+
+  # Accepts long serial frame lines (512 B) for manual BufferParams(line_length).
+  smp_server.fixture.serial_line512.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        line512.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+
+  # MCUmgr params command disabled: MCUMgrParametersRead is unsupported, so
+  # smpclient falls back to BufferParams defaults. noparams.conf is last so it
+  # overrides grp_os.conf.
+  smp_server.fixture.serial_noparams.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        bigrx.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf;
+        noparams.conf"
+
+  # SMP over the Zephyr shell: SMP shares the UART with the shell prompt, echo,
+  # and log output -- stresses smpclient's SMP/serial demux.
+  # Only native_sim: shell + SMP + logging overflows the nRF51 (16 KB) QEMU.
+  smp_server.fixture.shell.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="shell.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+
+  # UDP over IPv6, reachable at [::1]:1337 (smpclient's IPv6 UDP path).
+  smp_server.fixture.udp6.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="udp6.conf;
+        nsos.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+
+  # ---------------------------------------------------------------------------
+  # Runnable filesystem fixtures: littlefs mounted at /lfs1 on the native_sim
+  # flash simulator, for fs-group file upload/download round-trips.
+  # ---------------------------------------------------------------------------
+  smp_server.fixture.serial_fs.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        bigrx.conf;
+        grp_os.conf;
+        grp_fs.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=1024
+
+  smp_server.fixture.udp_fs.native_sim:
+    sysbuild: false
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="udp.conf;
+        nsos.conf;
+        grp_os.conf;
+        grp_fs.conf;
+        grp_stat.conf;
+        grp_enum.conf"
+
+  # ---------------------------------------------------------------------------
+  # MCUboot serial recovery: the bootloader's own SMP server (separate from the
+  # app's), entered by waiting for DFU at boot. Drive image upload against the
+  # bootloader; ships the matching signed.bin to upload. Build-only hardware
+  # image -- it does not fit the only MCUboot-capable QEMU target (nRF51, 16 KB
+  # RAM), so a runnable emulated recovery fixture is not provided.
+  # ---------------------------------------------------------------------------
+  smp_server.fixture.serial_recovery.nrf52840dk:
+    sysbuild: true
+    platform_allow: [nrf52840dk/nrf52840]
+    integration_platforms: [nrf52840dk/nrf52840]
+    extra_args:
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf;
+        grp_img.conf"
+      - SB_CONFIG_BOOTLOADER_MCUBOOT=y
+      - SB_CONFIG_MERGED_HEX_FILES=y
+      - mcuboot_CONFIG_MCUBOOT_SERIAL=y
+      - mcuboot_CONFIG_BOOT_SERIAL_ENTRANCE_GPIO=n
+      - mcuboot_CONFIG_BOOT_SERIAL_WAIT_FOR_DFU=y
+      - mcuboot_CONFIG_BOOT_SERIAL_WAIT_FOR_DFU_TIMEOUT=600000
+      - mcuboot_CONFIG_UART_CONSOLE=n
