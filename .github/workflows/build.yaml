@@ -71,10 +71,11 @@ jobs:
             config=${rest%.*}
             target=${rest#*.}
             base="fixtures/zephyr_${ver}_smp_server_${sha}_${target}_${config}"
-            # native_sim/QEMU: runnable executable / merged image
+            # native_sim: runnable executable. sysbuild (QEMU/hardware): the
+            # MCUboot + signed-app merged image, named .merged.hex to be explicit.
             [ -f "$d/zephyr/zephyr.exe" ] && cp "$d/zephyr/zephyr.exe" "${base}.exe"
             hex=$(ls "$d"/merged_*.hex 2>/dev/null | head -1)
-            [ -n "$hex" ] && cp "$hex" "${base}.hex"
+            [ -n "$hex" ] && cp "$hex" "${base}.merged.hex"
             # hardware DFU: signed application image for upload via the img group
             signed="$d/smp-server/zephyr/zephyr.signed.bin"
             [ -f "$signed" ] && cp "$signed" "${base}.signed.bin"

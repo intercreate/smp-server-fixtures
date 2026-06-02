@@ -14,9 +14,9 @@ single fixture can exercise any command.
 | `serial.native_sim` | native_sim | serial (host PTY) | `.exe` |
 | `serial_raw.native_sim` | native_sim | raw UART | `.exe` |
 | `udp.native_sim` | native_sim | UDP, `127.0.0.1:1337` | `.exe` |
-| `serial.qemu_cortex_m0` | QEMU | serial (host PTY) + DFU | `.hex` |
-| `serial.nrf52840dk` | hardware | serial + DFU | `.hex`, `.signed.bin` |
-| `ble.nrf52840dk` | hardware | BLE + DFU | `.hex`, `.signed.bin` |
+| `serial.qemu_cortex_m0` | QEMU | serial (host PTY) + DFU | `.merged.hex` |
+| `serial.nrf52840dk` | hardware | serial + DFU | `.merged.hex`, `.signed.bin` |
+| `ble.nrf52840dk` | hardware | BLE + DFU | `.merged.hex`, `.signed.bin` |
 
 The native_sim and QEMU fixtures run in software; the hardware fixtures are
 images to flash on a bench.
@@ -25,7 +25,7 @@ images to flash on a bench.
 
 Prebuilt fixtures are attached to the rolling
 [`latest` release](https://github.com/intercreate/smp-server-fixtures/releases/tag/latest)
-as `zephyr_<zephyr-version>_smp_server_<git-sha>_<target>_<config>.{exe,hex,signed.bin}`
+as `zephyr_<zephyr-version>_smp_server_<git-sha>_<target>_<config>.{exe,merged.hex,signed.bin}`
 with a `SHA256SUMS`. Download the one you need, or build locally (below).
 
 ## Use a fixture
@@ -48,7 +48,7 @@ $ smpmgr --ip 127.0.0.1 os echo hello
 **QEMU (DFU)** boots a merged MCUboot + app image with its console on a PTY:
 
 ```console
-$ HEX=$(ls zephyr_*_qemu_cortex_m0_serial.hex)
+$ HEX=$(ls zephyr_*_qemu_cortex_m0_serial.merged.hex)
 $ qemu-system-arm -cpu cortex-m0 -machine microbit -nographic \
     -chardev pty,id=con,mux=on -serial chardev:con \
     -device loader,file="$HEX"
