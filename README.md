@@ -38,10 +38,11 @@ Prebuilt fixtures are attached to GitHub releases as
 `zephyr_<zephyr-version>_smp_server_<git-sha>_<target>_<config>.<ext>` with a
 `SHA256SUMS` and a `manifest.json`. Extensions: `.exe` (native_sim), `.hex` (a
 plain emulated image), `.merged.hex` (MCUboot + app), `.signed.bin` (the app
-image to upload via the img group). The rolling
-[`latest` release](https://github.com/intercreate/smp-server-fixtures/releases/tag/latest)
-always tracks the newest build; every build is also kept as a permanent release
-tagged by its commit SHA. Download what you need, or build locally (below).
+image to upload via the img group). Every build is kept as a permanent release
+tagged by its commit SHA, and the newest is always marked as the repo's
+[latest release](https://github.com/intercreate/smp-server-fixtures/releases/latest)
+— so `releases/latest/download/manifest.json` always resolves the most recent
+build. Download what you need, or build locally (below).
 
 ## Manifest
 
