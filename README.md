@@ -23,10 +23,12 @@ images to flash on a bench.
 
 ## Get a fixture
 
-Prebuilt fixtures are attached to the rolling
+Prebuilt fixtures are attached to GitHub releases as
+`zephyr_<zephyr-version>_smp_server_<git-sha>_<target>_<config>.{exe,merged.hex,signed.bin}`
+with a `SHA256SUMS`. The rolling
 [`latest` release](https://github.com/intercreate/smp-server-fixtures/releases/tag/latest)
-as `zephyr_<zephyr-version>_smp_server_<git-sha>_<target>_<config>.{exe,merged.hex,signed.bin}`
-with a `SHA256SUMS`. Download the one you need, or build locally (below).
+always tracks the newest build; every build is also kept as a permanent release
+tagged by its commit SHA. Download the one you need, or build locally (below).
 
 ## Use a fixture
 

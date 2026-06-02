@@ -96,7 +96,7 @@ jobs:
           path: working_directory/twister-out/**/build.log
 
   release:
-    name: Publish rolling 'latest' release
+    name: Publish releases (rolling 'latest' + permanent per-commit)
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-24.04
@@ -112,6 +112,20 @@ jobs:
         working-directory: artifacts
         run: sha256sum * > SHA256SUMS
 
+      - id: sha
+        run: echo "short=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      # Permanent, immutable per-commit release (build history), tagged by SHA.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.sha.outputs.short }}
+          name: SMP Server Fixtures ${{ steps.sha.outputs.short }}
+          body: Built from ${{ github.sha }}.
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: artifacts/*
+
+      # Rolling pointer to the newest build (stable download URL).
       - run: gh release delete latest --cleanup-tag -y || true
         env:
           GH_TOKEN: ${{ github.token }}
