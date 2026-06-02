@@ -1,0 +1,6 @@
+/* qemu_cortex_m0 (microbit) exposes uart0 to the host; route MCUmgr to it. */
+/ {
+	chosen {
+		zephyr,uart-mcumgr = &uart0;
+	};
+};
