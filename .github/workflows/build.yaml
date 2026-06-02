@@ -85,7 +85,6 @@ jobs:
         with:
           name: fixtures-${{ matrix.leg }}
           path: working_directory/fixtures/*
-          archive: false # upload bare files, not a zip
           if-no-files-found: error
 
       - name: Upload Twister logs on failure
