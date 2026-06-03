@@ -15,8 +15,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-script:
+    name: Lint + type-check + test the fixture collector
+    runs-on: ubuntu-24.04
+    env:
+      UV_PYTHON: '3.13'  # match the script's requires-python and the build leg
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v8.1.0
+      - name: Ruff, mypy (strict), pytest
+        working-directory: .github/scripts
+        run: |
+          uvx ruff check .
+          uvx ruff format --check .
+          uvx --with pytest mypy --strict collect_fixtures.py test_collect_fixtures.py
+          uvx pytest
+
   build:
     name: Build ${{ matrix.leg }} fixtures
+    needs: check-script
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +72,8 @@ jobs:
           toolchains: ${{ matrix.toolchains }}
           ccache-cache-key: ${{ matrix.leg }}
 
+      - uses: astral-sh/setup-uv@v8.1.0
+
       - name: Build fixtures (Twister, all configs for this leg)
         working-directory: working_directory
         run: |
@@ -63,99 +84,13 @@ jobs:
       - name: Collect fixtures with canonical names and a manifest
         working-directory: working_directory
         run: |
-          # zephyr_<zephyr-version>_smp_server_<8-char-fixtures-SHA>_<target>_<config>.<ext>
+          # Canonical names + manifest are produced by a typed, unit-tested
+          # script (.github/scripts/); the check-script job gates it on ruff +
+          # mypy --strict + pytest. west stays here: it must run in the workspace.
           ver=$(west list zephyr --format='{revision}'); ver=${ver#v}
-          sha=${GITHUB_SHA::8}
-          mkdir -p fixtures
-          : > entries.jsonl
-          while IFS= read -r d; do
-            rest=$(basename "$d" | sed 's/^smp_server\.fixture\.//')  # <config>.<target>
-            config=${rest%.*}
-            target=${rest#*.}
-            base="fixtures/zephyr_${ver}_smp_server_${sha}_${target}_${config}"
-
-            # native_sim -> .exe; sysbuild MCUboot merge -> .merged.hex; a plain
-            # emulated/HW image -> .hex; the signed app image -> .signed.bin.
-            artifact=""
-            if [ -f "$d/zephyr/zephyr.exe" ]; then
-              cp "$d/zephyr/zephyr.exe" "${base}.exe"; artifact="$(basename "${base}.exe")"
-            fi
-            hex=$(ls "$d"/merged_*.hex 2>/dev/null | head -1 || true)
-            if [ -n "$hex" ]; then
-              cp "$hex" "${base}.merged.hex"; artifact="$(basename "${base}.merged.hex")"
-            elif [ -z "$artifact" ] && [ -f "$d/zephyr/zephyr.hex" ]; then
-              cp "$d/zephyr/zephyr.hex" "${base}.hex"; artifact="$(basename "${base}.hex")"
-            elif [ -z "$artifact" ] && [ -f "$d/zephyr/zephyr.elf" ]; then
-              # Emulated targets that emit no .hex (e.g. mps2) ship the ELF; QEMU runs it with -kernel.
-              cp "$d/zephyr/zephyr.elf" "${base}.elf"; artifact="$(basename "${base}.elf")"
-            elif [ -z "$artifact" ] && [ -f "$d/mcuboot/zephyr/zephyr.elf" ]; then
-              # Serial-recovery fixture: MCUboot itself is the bootable image (boots to
-              # recovery); the .signed.bin below is the image to upload to it.
-              cp "$d/mcuboot/zephyr/zephyr.elf" "${base}.elf"; artifact="$(basename "${base}.elf")"
-            fi
-            signed="$d/smp-server/zephyr/zephyr.signed.bin"
-            [ -f "$signed" ] && cp "$signed" "${base}.signed.bin"
-
-            # Skip filtered/failed scenario dirs (twister creates stubs with no image).
-            [ -z "$artifact" ] && continue
-
-            # Manifest entry derived from the built .config (app image when sysbuild).
-            cfg="$d/smp-server/zephyr/.config"; [ -f "$cfg" ] || cfg="$d/zephyr/.config"
-            getc() { grep -E "^$1=" "$cfg" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true; }
-            hasc() { grep -q "^$1=y" "$cfg" 2>/dev/null; }
-            if   hasc CONFIG_MCUMGR_TRANSPORT_BT;      then transport=bt
-            elif hasc CONFIG_UART_MCUMGR_RAW_PROTOCOL; then transport=serial_raw
-            elif hasc CONFIG_MCUMGR_TRANSPORT_SHELL;   then transport=shell
-            elif hasc CONFIG_MCUMGR_TRANSPORT_UART;    then transport=serial
-            elif hasc CONFIG_MCUMGR_TRANSPORT_UDP;     then transport=udp
-            else transport=unknown; fi
-            ipfam=null
-            if hasc CONFIG_MCUMGR_TRANSPORT_UDP; then
-              if hasc CONFIG_MCUMGR_TRANSPORT_UDP_IPV6; then ipfam='"ipv6"'; else ipfam='"ipv4"'; fi
-            fi
-            buf_size=$(getc CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE);   buf_size=${buf_size:-null}
-            buf_count=$(getc CONFIG_MCUMGR_TRANSPORT_NETBUF_COUNT); buf_count=${buf_count:-null}
-            line_max=$(getc CONFIG_UART_MCUMGR_RX_BUF_SIZE);        line_max=${line_max:-null}
-            udp_port=$(getc CONFIG_MCUMGR_TRANSPORT_UDP_PORT);      udp_port=${udp_port:-null}
-            groups=()
-            for pair in OS:os IMG:img STAT:stat SETTINGS:settings FS:fs SHELL:shell ENUM:enum ZBASIC:zbasic; do
-              hasc "CONFIG_MCUMGR_GRP_${pair%%:*}" && groups+=("${pair##*:}")
-            done
-            if [ ${#groups[@]} -eq 0 ]; then groups_json='[]'
-            else groups_json=$(printf '%s\n' "${groups[@]}" | jq -R . | jq -s -c .); fi
-            mcuboot=false; [ -f "${base}.merged.hex" ] && mcuboot=true
-            recovery=false; [ "$config" = serial_recovery ] && recovery=true
-            qemu=""
-            case "$target" in
-              qemu_cortex_m0) qcpu=cortex-m0; qmach=microbit;;
-              mps2_an385)     qcpu=cortex-m3; qmach=mps2-an385;;
-              *)              qcpu=""; qmach="";;
-            esac
-            if [ -n "$qmach" ]; then
-              case "$artifact" in
-                *.elf) qload="-kernel ${artifact}";;
-                *)     qload="-device loader,file=${artifact}";;
-              esac
-              qemu="qemu-system-arm -cpu ${qcpu} -machine ${qmach} -nographic -chardev socket,id=con,host=127.0.0.1,port=<PORT>,server=on,wait=off -serial chardev:con -monitor none ${qload}"
-            fi
-            run=""; [ -f "${base}.exe" ] && run="./${artifact}"
-            jq -n \
-              --arg artifact "$artifact" --arg target "$target" --arg config "$config" \
-              --arg transport "$transport" --argjson ip_family "$ipfam" \
-              --argjson buf_size "$buf_size" --argjson buf_count "$buf_count" \
-              --argjson line_length_max "$line_max" --argjson udp_port "$udp_port" \
-              --argjson groups "$groups_json" --argjson mcuboot "$mcuboot" \
-              --argjson serial_recovery "$recovery" --arg qemu_cmd "$qemu" --arg run "$run" \
-              '{artifact:$artifact,target:$target,config:$config,transport:$transport,
-                ip_family:$ip_family,buf_size:$buf_size,buf_count:$buf_count,
-                line_length_max:$line_length_max,udp_port:$udp_port,groups:$groups,
-                mcuboot:$mcuboot,serial_recovery:$serial_recovery,
-                run:(if $run=="" then null else $run end),
-                qemu_cmd:(if $qemu_cmd=="" then null else $qemu_cmd end)}' >> entries.jsonl
-          done < <(find twister-out -type d -name 'smp_server.fixture.*')
-          jq -s -S 'sort_by(.target,.config)' entries.jsonl > "fixtures/manifest-${{ matrix.leg }}.json"
-          ls -l fixtures
-          cat "fixtures/manifest-${{ matrix.leg }}.json"
+          uv run .github/scripts/collect_fixtures.py \
+            --git-sha "$GITHUB_SHA" --zephyr-version "$ver" \
+            --leg "${{ matrix.leg }}" --twister-out twister-out --out-dir fixtures
 
       - uses: actions/upload-artifact@v7
         with:
@@ -200,7 +135,7 @@ jobs:
       # make_latest:true repoints GitHub's own /releases/latest at this build, so
       # 'latest' is a symlink to the newest release (stable download URL) rather
       # than a release that accumulates a copy of every build's assets.
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.sha.outputs.short }}
           name: SMP Server Fixtures ${{ steps.sha.outputs.short }}
