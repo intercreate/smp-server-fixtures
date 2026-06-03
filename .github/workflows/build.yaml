@@ -26,11 +26,12 @@ jobs:
           - leg: native_sim
             toolchains: ""
             platforms: native_sim
-          # Zephyr SDK ARM toolchain: the runnable QEMU DFU fixture and the
+          # Zephyr SDK ARM toolchain: the runnable QEMU fixtures (qemu_cortex_m0
+          # DFU, mps2/an385 all-groups + shell + serial recovery) and the
           # build-only hardware images.
           - leg: arm
             toolchains: arm-zephyr-eabi
-            platforms: qemu_cortex_m0 nrf52840dk/nrf52840
+            platforms: qemu_cortex_m0 mps2/an385 nrf52840dk/nrf52840
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
