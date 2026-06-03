@@ -420,8 +420,8 @@ tests:
     platform_allow: [mps2/an385]
     integration_platforms: [mps2/an385]
     extra_args:
-      - FILE_SUFFIX="recovery"
-      - >-
+      - &mps2_doitall_suffix FILE_SUFFIX="recovery"
+      - &mps2_doitall_conf >-
         EXTRA_CONF_FILE="serial.conf;
         grp_os.conf;
         grp_fs.conf;
@@ -432,14 +432,93 @@ tests:
         grp_zbasic.conf;
         grp_img.conf;
         ramload.conf"
-      - EXTRA_DTC_OVERLAY_FILE="mps2_an385_ramload_app.overlay"
-      - SB_CONFIG_BOOTLOADER_MCUBOOT=y
-      - SB_CONFIG_MCUBOOT_MODE_RAM_LOAD=y
-      - SB_CONFIG_BOOT_SIGNATURE_TYPE_NONE=y
+      - &mps2_doitall_overlay EXTRA_DTC_OVERLAY_FILE="mps2_an385_ramload_app.overlay"
+      - &mps2_doitall_mcuboot SB_CONFIG_BOOTLOADER_MCUBOOT=y
+      - &mps2_doitall_ramload SB_CONFIG_MCUBOOT_MODE_RAM_LOAD=y
+      - &mps2_doitall_unsigned SB_CONFIG_BOOT_SIGNATURE_TYPE_NONE=y
       # mps2 defaults hex output off (no real flash); MCUboot's code-only hex is
       # the first QEMU loader.
-      - mcuboot_CONFIG_BUILD_OUTPUT_HEX=y
+      - &mps2_doitall_hex mcuboot_CONFIG_BUILD_OUTPUT_HEX=y
       # DEBUG verbosity throughout (mps2/an385 has the room).
-      - CONFIG_LOG_DEFAULT_LEVEL=4
-      - mcuboot_CONFIG_LOG_DEFAULT_LEVEL=4
-      - mcuboot_CONFIG_MCUBOOT_LOG_LEVEL_DBG=y
+      - &mps2_doitall_log CONFIG_LOG_DEFAULT_LEVEL=4
+      - &mps2_doitall_mcuboot_log mcuboot_CONFIG_LOG_DEFAULT_LEVEL=4
+      - &mps2_doitall_mcuboot_dbg mcuboot_CONFIG_MCUBOOT_LOG_LEVEL_DBG=y
+
+  # mps2/an385 buffer-size matrix on the do-it-all RAM_LOAD image: the same
+  # every-group-incl-img recovery fixture above, swept across
+  # CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE. mps2's UART paces the link (no PTY-burst
+  # fragment drop) and its 4 MB SRAM clears the RAM ceiling, so it is the
+  # reliable non-bursty target the bursty native_sim and the 16 KB
+  # qemu_cortex_m0 cannot be for a real buffer-filling transaction at
+  # 512/1024/2048 (smpclient #73/#81). Every group is on, so a max-size message
+  # round-trips three ways at each size: an os echo, an fs upload, and an img
+  # (DFU) upload. 400 is the non-multiple of the 128 B client line length. Same
+  # serial_recovery_* scheme as above (two QEMU loaders: MCUboot's code-only hex
+  # plus the signed app dropped into slot0's RAM-backed sim-flash).
+  smp_server.fixture.serial_recovery_buf400.mps2_an385:
+    sysbuild: true
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - *mps2_doitall_suffix
+      - *mps2_doitall_conf
+      - *mps2_doitall_overlay
+      - *mps2_doitall_mcuboot
+      - *mps2_doitall_ramload
+      - *mps2_doitall_unsigned
+      - *mps2_doitall_hex
+      - *mps2_doitall_log
+      - *mps2_doitall_mcuboot_log
+      - *mps2_doitall_mcuboot_dbg
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=400
+
+  smp_server.fixture.serial_recovery_buf512.mps2_an385:
+    sysbuild: true
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - *mps2_doitall_suffix
+      - *mps2_doitall_conf
+      - *mps2_doitall_overlay
+      - *mps2_doitall_mcuboot
+      - *mps2_doitall_ramload
+      - *mps2_doitall_unsigned
+      - *mps2_doitall_hex
+      - *mps2_doitall_log
+      - *mps2_doitall_mcuboot_log
+      - *mps2_doitall_mcuboot_dbg
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=512
+
+  smp_server.fixture.serial_recovery_buf1024.mps2_an385:
+    sysbuild: true
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - *mps2_doitall_suffix
+      - *mps2_doitall_conf
+      - *mps2_doitall_overlay
+      - *mps2_doitall_mcuboot
+      - *mps2_doitall_ramload
+      - *mps2_doitall_unsigned
+      - *mps2_doitall_hex
+      - *mps2_doitall_log
+      - *mps2_doitall_mcuboot_log
+      - *mps2_doitall_mcuboot_dbg
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=1024
+
+  smp_server.fixture.serial_recovery_buf2048.mps2_an385:
+    sysbuild: true
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - *mps2_doitall_suffix
+      - *mps2_doitall_conf
+      - *mps2_doitall_overlay
+      - *mps2_doitall_mcuboot
+      - *mps2_doitall_ramload
+      - *mps2_doitall_unsigned
+      - *mps2_doitall_hex
+      - *mps2_doitall_log
+      - *mps2_doitall_mcuboot_log
+      - *mps2_doitall_mcuboot_dbg
+      - CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=2048

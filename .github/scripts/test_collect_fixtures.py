@@ -250,6 +250,23 @@ def test_second_loader_only_for_serial_recovery_hex_with_signed() -> None:
     assert cf.second_loader("serial_recovery", "BASE", boot_elf, True) is None
 
 
+def test_is_serial_recovery_matches_base_and_buffer_matrix() -> None:
+    # The buffer-matrix variants share the two-loader RAM_LOAD scheme.
+    assert cf.is_serial_recovery("serial_recovery") is True
+    assert cf.is_serial_recovery("serial_recovery_buf512") is True
+    assert cf.is_serial_recovery("serial_recovery_buf2048") is True
+    # Plain serial fixtures (incl. their own buffer matrix) are not recovery.
+    assert cf.is_serial_recovery("serial") is False
+    assert cf.is_serial_recovery("serial_buf512") is False
+
+
+def test_second_loader_for_serial_recovery_buffer_matrix() -> None:
+    boot_hex = cf.Hex("BASE.hex", "mcuboot/zephyr/zephyr.hex")
+    assert cf.second_loader("serial_recovery_buf2048", "BASE", boot_hex, True) == cf.SecondLoader(
+        file="BASE.signed.bin", addr="0x20050000"
+    )
+
+
 def test_canonical_basename() -> None:
     assert (
         cf.canonical_basename("4.4.0", "05e7c6bddead", "native_sim", "serial")
@@ -369,6 +386,34 @@ def test_process_serial_recovery_mps2_two_loader(tmp_path: Path) -> None:
     # Both loaders' files are shipped: the bootable mcuboot hex and the app payload.
     assert (out / f"{base}.hex").is_file()
     assert (out / f"{base}.signed.bin").is_file()
+
+
+def test_process_serial_recovery_buffer_matrix_mps2(tmp_path: Path) -> None:
+    # A buffer-matrix variant of the do-it-all fixture: same two-loader RAM_LOAD
+    # scheme, just a swept netbuf size carried through to the manifest entry.
+    out = tmp_path / "out"
+    out.mkdir()
+    build_dir = make_build_dir(
+        tmp_path,
+        "smp_server.fixture.serial_recovery_buf2048.mps2_an385",
+        files={
+            "mcuboot/zephyr/zephyr.hex": "x",
+            "smp-server/zephyr/.config": (
+                "CONFIG_MCUMGR_TRANSPORT_UART=y\n"
+                "CONFIG_MCUMGR_GRP_IMG=y\n"
+                "CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE=2048\n"
+            ),
+            "smp-server/zephyr/zephyr.signed.bin": "x",
+        },
+    )
+    entry = cf.process_build_dir(build_dir, "4.4.0", "05e7c6bddead", out)
+    assert entry is not None
+    assert entry.config == "serial_recovery_buf2048"
+    assert entry.buf_size == 2048
+    assert entry.serial_recovery is True
+    assert entry.mcuboot is True
+    assert entry.qemu_cmd is not None
+    assert entry.qemu_cmd.count("-device loader") == 2
 
 
 def test_process_serial_recovery_mps2_elf_fallback(tmp_path: Path) -> None:
