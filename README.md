@@ -21,7 +21,7 @@ ships a machine-readable [`manifest.json`](#manifest) describing every fixture.
 | **`udp6`** | native_sim | UDP over IPv6 (`[::1]:1337`). |
 | **`serial_fs`, `udp_fs`** | native_sim | littlefs mounted at `/lfs1` for fs-group file upload/download. |
 | **`serial`** (roomy) | mps2 | Cortex-M3, 4 MB SRAM via a flash overlay: one runnable image with **every** non-img group, fs file round-trips, and large buffers. |
-| **`serial_recovery`** | mps2 | Runnable MCUboot **serial recovery** — boot the `.elf`; with no app present it stays in the bootloader's SMP server. Upload the paired `.signed.bin` to exercise the recovery path. |
+| **`serial_recovery`** | mps2 | Do-it-all MCUboot RAM_LOAD image — boots **straight into the full app** (every group incl. img) serving SMP on uart0 and logging on uart1. `os reset boot_mode=1` re-enters MCUboot **serial recovery** on demand; an upload there persists across the soft reset (slots live in a non-erased RAM-backed flash simulator). Launched with two QEMU loaders: the MCUboot `.hex` plus the `.signed.bin` dropped into slot0. |
 | **`serial`** | qemu_cortex_m0 | Merged MCUboot + signed app — exercises the img (DFU) group under emulation. |
 | **`serial`, `ble`, `serial_recovery`** | nrf52840dk | Build-only images for a hardware bench. |
 
@@ -29,10 +29,12 @@ The authoritative, per-release list (with each fixture's transport, buffers,
 groups, and launch command) is the [manifest](#manifest). Fixtures are defined
 in [`apps/smp-server/sample.yaml`](apps/smp-server/sample.yaml).
 
-> A single emulated image that boots the full app **and** re-enters recovery on
-> demand (MCUboot RAM_LOAD + `os reset boot_mode`) is in progress — it needs the
-> `boot_mode` field across the SMP stack (smp/smpclient/smpmgr) and a fix for
-> the RAM_LOAD boot path on QEMU mps2.
+> The emulated `serial_recovery` / mps2 fixture is a single MCUboot RAM_LOAD
+> image that boots **straight into the full app** (every group incl. img) and
+> re-enters recovery on demand: `os reset boot_mode=1` (retained boot mode)
+> drops back into MCUboot serial recovery, and an upload there persists across
+> the soft reset because the image slots live in a non-erased RAM-backed flash
+> simulator. See [Use a fixture](#use-a-fixture) for the two-loader launch.
 
 ## Get a fixture
 
@@ -63,7 +65,7 @@ client can build its test registry instead of hardcoding fixture rows. Fields:
 | `groups` | Enabled MCUmgr command groups, e.g. `["os","stat","fs","enum"]`. |
 | `mcuboot`, `serial_recovery` | Whether the image carries MCUboot / is a recovery image. |
 | `run` | Launch command for native_sim (`null` otherwise). |
-| `qemu_cmd` | QEMU launch command for emulated targets, with `<PORT>` to fill in (`null` otherwise). |
+| `qemu_cmd` | QEMU launch command for emulated targets, with `<PORT>` to fill in (`null` otherwise). For the do-it-all `serial_recovery` / mps2 fixture this carries two `-device loader` entries (MCUboot `.hex` plus the app `.signed.bin` dropped into slot0). |
 
 ## Use a fixture
 
@@ -105,6 +107,28 @@ $ qemu-system-arm -cpu cortex-m0 -machine microbit -nographic \
 char device redirected to /dev/pts/N
 $ smpmgr --port /dev/pts/N image state-read
 ```
+
+**Do-it-all `serial_recovery` (mps2)** boots straight into the full app with two
+loaders: MCUboot's code-only `.hex`, plus the signed app dropped directly into
+slot0's flash-simulator backing store at SRAM `0x20050000`. uart0 is the SMP
+transport (a TCP socket again, for fragmented SMP) and uart1 is the
+console/boot/app log — QEMU maps the first `-serial` to uart0 and the second to
+uart1:
+
+```console
+$ qemu-system-arm -cpu cortex-m3 -machine mps2-an385 -nographic \
+    -chardev socket,id=smp,host=127.0.0.1,port=5555,server=on,wait=off \
+    -serial chardev:smp \                                              # uart0 = SMP
+    -serial file:/tmp/da_uart1.log \                                   # uart1 = console/log
+    -monitor none \
+    -device loader,file=zephyr_*_mps2_serial_recovery.hex \
+    -device loader,file=zephyr_*_mps2_serial_recovery.signed.bin,addr=0x20050000
+# connect your SMP client to 127.0.0.1:5555 — the app serves every group incl. img
+```
+
+Send `os reset boot_mode=1` (retained boot mode) to re-enter MCUboot serial
+recovery; an upload there persists across the soft reset, since the slots live
+in a non-erased RAM-backed flash simulator.
 
 ## Build locally
 

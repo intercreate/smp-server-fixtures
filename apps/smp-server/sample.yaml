@@ -407,11 +407,14 @@ tests:
       - mcuboot_CONFIG_BOOT_SERIAL_WAIT_FOR_DFU_TIMEOUT=600000
       - mcuboot_CONFIG_UART_CONSOLE=n
 
-  # Runnable serial recovery on emulated mps2/an385: MCUboot boots its own SMP
-  # server and, with no valid application present, stays in serial recovery.
-  # Upload the matching .signed.bin to the bootloader to exercise the recovery
-  # path. FILE_SUFFIX="recovery" pulls in the mcuboot-side flash layout + config
-  # (sysbuild/mcuboot_recovery.{conf,overlay}); the app builds/signs for slot0.
+  # Do-it-all emulated fixture on mps2/an385: one MCUboot RAM_LOAD image hosting
+  # every command group (incl. img). MCUboot serves serial recovery SMP on uart0
+  # and logs on uart1; the app does the same once loaded. `os reset boot_mode=1`
+  # re-enters MCUboot serial recovery on demand (retained boot mode); an upload
+  # there persists across the soft reset (slots live in a non-erased RAM-backed
+  # sim-flash). So a single fixture covers all groups, DFU, and recovery re-entry.
+  # FILE_SUFFIX="recovery" applies the mcuboot-side RAM_LOAD layout + config
+  # (sysbuild/mcuboot_recovery.{conf,overlay}); the app links for RAM execution.
   smp_server.fixture.serial_recovery.mps2_an385:
     sysbuild: true
     platform_allow: [mps2/an385]
@@ -421,10 +424,22 @@ tests:
       - >-
         EXTRA_CONF_FILE="serial.conf;
         grp_os.conf;
+        grp_fs.conf;
+        grp_shell.conf;
         grp_stat.conf;
+        grp_settings.conf;
         grp_enum.conf;
-        grp_img.conf"
-      - EXTRA_DTC_OVERLAY_FILE="mps2_an385_codepart.overlay"
+        grp_zbasic.conf;
+        grp_img.conf;
+        ramload.conf"
+      - EXTRA_DTC_OVERLAY_FILE="mps2_an385_ramload_app.overlay"
       - SB_CONFIG_BOOTLOADER_MCUBOOT=y
-      - SB_CONFIG_MCUBOOT_MODE_OVERWRITE_ONLY=y
+      - SB_CONFIG_MCUBOOT_MODE_RAM_LOAD=y
       - SB_CONFIG_BOOT_SIGNATURE_TYPE_NONE=y
+      # mps2 defaults hex output off (no real flash); MCUboot's code-only hex is
+      # the first QEMU loader.
+      - mcuboot_CONFIG_BUILD_OUTPUT_HEX=y
+      # DEBUG verbosity throughout (mps2/an385 has the room).
+      - CONFIG_LOG_DEFAULT_LEVEL=4
+      - mcuboot_CONFIG_LOG_DEFAULT_LEVEL=4
+      - mcuboot_CONFIG_MCUBOOT_LOG_LEVEL_DBG=y

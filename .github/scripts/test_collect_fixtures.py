@@ -21,6 +21,7 @@ def make_outputs(
     merged_hexes: tuple[str, ...] = (),
     has_hex: bool = False,
     has_elf: bool = False,
+    has_mcuboot_hex: bool = False,
     has_mcuboot_elf: bool = False,
     has_signed: bool = False,
 ) -> cf.BuildOutputs:
@@ -29,6 +30,7 @@ def make_outputs(
         merged_hexes=merged_hexes,
         has_hex=has_hex,
         has_elf=has_elf,
+        has_mcuboot_hex=has_mcuboot_hex,
         has_mcuboot_elf=has_mcuboot_elf,
         has_signed=has_signed,
     )
@@ -154,16 +156,32 @@ def test_select_artifact_elf_only() -> None:
     assert isinstance(cf.select_artifact(make_outputs(has_elf=True), "BASE"), cf.Elf)
 
 
+def test_select_artifact_mcuboot_hex_is_bootable() -> None:
+    # Serial-recovery fixture: MCUboot's code-only hex is the bootable image.
+    art = cf.select_artifact(make_outputs(has_mcuboot_hex=True, has_signed=True), "BASE")
+    assert isinstance(art, cf.Hex)
+    assert art.name == "BASE.hex"
+    assert art.src == "mcuboot/zephyr/zephyr.hex"
+
+
+def test_select_artifact_mcuboot_hex_beats_mcuboot_elf() -> None:
+    art = cf.select_artifact(make_outputs(has_mcuboot_hex=True, has_mcuboot_elf=True), "BASE")
+    assert isinstance(art, cf.Hex)
+    assert art.src == "mcuboot/zephyr/zephyr.hex"
+
+
 def test_select_artifact_mcuboot_elf_fallback() -> None:
-    # Serial-recovery fixture: only MCUboot's own elf is present.
+    # Recovery build lacking the mcuboot hex falls back to MCUboot's own elf.
     art = cf.select_artifact(make_outputs(has_mcuboot_elf=True), "BASE")
     assert isinstance(art, cf.Elf)
     assert art.name == "BASE.elf"
     assert art.src == "mcuboot/zephyr/zephyr.elf"
 
 
-def test_select_artifact_zephyr_elf_beats_mcuboot_elf() -> None:
-    art = cf.select_artifact(make_outputs(has_elf=True, has_mcuboot_elf=True), "BASE")
+def test_select_artifact_zephyr_elf_beats_mcuboot() -> None:
+    art = cf.select_artifact(
+        make_outputs(has_elf=True, has_mcuboot_hex=True, has_mcuboot_elf=True), "BASE"
+    )
     assert isinstance(art, cf.Elf)
     assert art.src == "zephyr/zephyr.elf"
 
@@ -185,7 +203,7 @@ def test_run_command_only_for_exe() -> None:
 
 
 def test_qemu_command_exact_for_merged_hex() -> None:
-    cmd = cf.qemu_command("qemu_cortex_m0", cf.MergedHex("ZZZ.merged.hex", "merged_a.hex"))
+    cmd = cf.qemu_command("qemu_cortex_m0", cf.MergedHex("ZZZ.merged.hex", "merged_a.hex"), None)
     assert cmd == (
         "qemu-system-arm -cpu cortex-m0 -machine microbit -nographic "
         "-chardev socket,id=con,host=127.0.0.1,port=<PORT>,server=on,wait=off "
@@ -194,14 +212,42 @@ def test_qemu_command_exact_for_merged_hex() -> None:
 
 
 def test_qemu_command_elf_uses_kernel() -> None:
-    cmd = cf.qemu_command("mps2_an385", cf.Elf("ZZZ.elf", "zephyr/zephyr.elf"))
+    cmd = cf.qemu_command("mps2_an385", cf.Elf("ZZZ.elf", "zephyr/zephyr.elf"), None)
     assert cmd is not None
     assert "-cpu cortex-m3 -machine mps2-an385" in cmd
     assert cmd.endswith("-kernel ZZZ.elf")
 
 
 def test_qemu_command_none_for_non_emulated() -> None:
-    assert cf.qemu_command("native_sim", cf.Exe("n.exe", "zephyr/zephyr.exe")) is None
+    assert cf.qemu_command("native_sim", cf.Exe("n.exe", "zephyr/zephyr.exe"), None) is None
+
+
+def test_qemu_command_two_loader_serial_recovery() -> None:
+    cmd = cf.qemu_command(
+        "mps2_an385",
+        cf.Hex("BOOT.hex", "mcuboot/zephyr/zephyr.hex"),
+        cf.SecondLoader(file="APP.signed.bin", addr="0x20050000"),
+    )
+    assert cmd == (
+        "qemu-system-arm -cpu cortex-m3 -machine mps2-an385 -nographic "
+        "-chardev socket,id=con,host=127.0.0.1,port=<PORT>,server=on,wait=off "
+        "-serial chardev:con -serial null -monitor none "
+        "-device loader,file=BOOT.hex "
+        "-device loader,file=APP.signed.bin,addr=0x20050000"
+    )
+    assert cmd.count("-device loader") == 2
+
+
+def test_second_loader_only_for_serial_recovery_hex_with_signed() -> None:
+    boot_hex = cf.Hex("BASE.hex", "mcuboot/zephyr/zephyr.hex")
+    boot_elf = cf.Elf("BASE.elf", "mcuboot/zephyr/zephyr.elf")
+    assert cf.second_loader("serial_recovery", "BASE", boot_hex, True) == cf.SecondLoader(
+        file="BASE.signed.bin", addr="0x20050000"
+    )
+    assert cf.second_loader("serial_recovery", "BASE", boot_hex, False) is None
+    assert cf.second_loader("serial", "BASE", boot_hex, True) is None
+    # The .elf fallback never carries a second loader (ROM regions would overlap).
+    assert cf.second_loader("serial_recovery", "BASE", boot_elf, True) is None
 
 
 def test_canonical_basename() -> None:
@@ -286,9 +332,48 @@ def test_process_mps2_elf(tmp_path: Path) -> None:
     assert "-kernel " in entry.qemu_cmd
 
 
-def test_process_serial_recovery_mps2(tmp_path: Path) -> None:
-    # Runnable mps2 serial recovery: MCUboot is the bootable image
-    # (mcuboot/zephyr/zephyr.elf); the app ships only as .signed.bin. No merged hex.
+def test_process_serial_recovery_mps2_two_loader(tmp_path: Path) -> None:
+    # Do-it-all mps2 serial recovery: MCUboot's code-only hex is the bootable
+    # image and the signed app is pre-loaded into slot0's mock_flash so the
+    # board boots straight to the app -- a two-loader QEMU command.
+    out = tmp_path / "out"
+    out.mkdir()
+    build_dir = make_build_dir(
+        tmp_path,
+        "smp_server.fixture.serial_recovery.mps2_an385",
+        files={
+            "mcuboot/zephyr/zephyr.hex": "x",
+            "smp-server/zephyr/.config": (
+                "CONFIG_MCUMGR_TRANSPORT_UART=y\nCONFIG_MCUMGR_GRP_IMG=y\n"
+            ),
+            "smp-server/zephyr/zephyr.signed.bin": "x",
+        },
+    )
+    entry = cf.process_build_dir(build_dir, "4.4.0", "05e7c6bddead", out)
+    assert entry is not None
+    base = "zephyr_4.4.0_smp_server_05e7c6bd_mps2_an385_serial_recovery"
+    assert entry.artifact == f"{base}.hex"
+    assert entry.serial_recovery is True
+    assert entry.mcuboot is True
+    assert entry.transport == "serial"
+    assert entry.run is None
+
+    cmd = entry.qemu_cmd
+    assert cmd is not None
+    assert "-cpu cortex-m3 -machine mps2-an385" in cmd
+    assert "-serial chardev:con -serial null -monitor none" in cmd
+    assert cmd.count("-device loader") == 2
+    assert f"-device loader,file={base}.hex" in cmd
+    assert f"-device loader,file={base}.signed.bin,addr=0x20050000" in cmd
+
+    # Both loaders' files are shipped: the bootable mcuboot hex and the app payload.
+    assert (out / f"{base}.hex").is_file()
+    assert (out / f"{base}.signed.bin").is_file()
+
+
+def test_process_serial_recovery_mps2_elf_fallback(tmp_path: Path) -> None:
+    # A recovery build without the mcuboot hex still ships MCUboot's elf as a
+    # single-loader -kernel image (the .signed.bin remains the upload payload).
     out = tmp_path / "out"
     out.mkdir()
     build_dir = make_build_dir(
@@ -306,15 +391,11 @@ def test_process_serial_recovery_mps2(tmp_path: Path) -> None:
     assert entry is not None
     assert entry.artifact == "zephyr_4.4.0_smp_server_05e7c6bd_mps2_an385_serial_recovery.elf"
     assert entry.serial_recovery is True
-    assert entry.mcuboot is False
-    assert entry.transport == "serial"
-    assert entry.run is None
+    assert entry.mcuboot is True
     assert entry.qemu_cmd is not None
-    assert "-cpu cortex-m3 -machine mps2-an385" in entry.qemu_cmd
     assert entry.qemu_cmd.endswith("-kernel " + entry.artifact)
+    assert entry.qemu_cmd.count("-device loader") == 0
     assert (out / entry.artifact).is_file()
-    signed = out / (entry.artifact.removesuffix(".elf") + ".signed.bin")
-    assert signed.is_file()
 
 
 def test_process_skips_image_less_stub(tmp_path: Path) -> None:

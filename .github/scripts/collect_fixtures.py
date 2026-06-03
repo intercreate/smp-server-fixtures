@@ -24,6 +24,12 @@ from typing import Final, Literal, NamedTuple, Self, assert_never
 
 FIXTURE_PREFIX: Final = "smp_server.fixture."
 SIGNED_REL: Final = "smp-server/zephyr/zephyr.signed.bin"
+MCUBOOT_HEX_REL: Final = "mcuboot/zephyr/zephyr.hex"
+MCUBOOT_ELF_REL: Final = "mcuboot/zephyr/zephyr.elf"
+SERIAL_RECOVERY_CONFIG: Final = "serial_recovery"
+# slot0 mock_flash physical SRAM address for the mps2/an385 serial_recovery map:
+# FlashSim @ 0x20040000 + slot0 flash offset 0x10000.
+SLOT0_MOCK_FLASH_ADDR: Final = "0x20050000"
 
 
 class CollectError(Exception):
@@ -95,6 +101,7 @@ class BuildOutputs(NamedTuple):
     merged_hexes: tuple[str, ...]
     has_hex: bool
     has_elf: bool
+    has_mcuboot_hex: bool
     has_mcuboot_elf: bool
     has_signed: bool
 
@@ -187,9 +194,13 @@ def select_artifact(outputs: BuildOutputs, base: str) -> Artifact | None:
     combination as a contradiction rather than silently preferring one. Real
     sysbuild dirs do legitimately carry ``merged.hex`` alongside ``zephyr.hex``
     and ``zephyr.elf``, so those fall through to the priority
-    ``merged.hex > exe > hex > elf > mcuboot/zephyr/zephyr.elf``. The last is the
-    serial-recovery fixture, where MCUboot itself is the bootable image and the
-    app ships only as a ``.signed.bin`` to upload to it.
+    ``merged.hex > exe > hex > elf > mcuboot/zephyr/zephyr.hex >
+    mcuboot/zephyr/zephyr.elf``. The last two are the serial-recovery fixture,
+    where MCUboot itself is the bootable image and the app ships only as a
+    ``.signed.bin`` second-loader payload. The code-only hex is preferred over
+    the elf: its NOLOAD ``mock_flash`` region is absent from the hex, so a second
+    QEMU loader can drop the signed app straight into slot0's backing store with
+    no "ROM regions overlapping" error.
     """
     if outputs.has_exe and outputs.merged_hexes:
         raise CollectError(
@@ -205,13 +216,56 @@ def select_artifact(outputs: BuildOutputs, base: str) -> Artifact | None:
         return Hex(name=f"{base}.hex", src="zephyr/zephyr.hex")
     if outputs.has_elf:
         return Elf(name=f"{base}.elf", src="zephyr/zephyr.elf")
+    if outputs.has_mcuboot_hex:
+        return Hex(name=f"{base}.hex", src=MCUBOOT_HEX_REL)
     if outputs.has_mcuboot_elf:
-        return Elf(name=f"{base}.elf", src="mcuboot/zephyr/zephyr.elf")
+        return Elf(name=f"{base}.elf", src=MCUBOOT_ELF_REL)
     return None
 
 
-def is_mcuboot(artifact: Artifact) -> bool:
-    return isinstance(artifact, MergedHex)
+class SecondLoader(NamedTuple):
+    """A ``-device loader,file=...,addr=...`` payload dropped after the kernel.
+
+    The serial-recovery fixture boots MCUboot's code-only hex and pre-loads the
+    signed app into slot0's ``mock_flash`` backing store, so no upload is needed.
+    """
+
+    file: str
+    addr: str
+
+
+def is_serial_recovery(config: str) -> bool:
+    return config == SERIAL_RECOVERY_CONFIG
+
+
+def is_mcuboot(config: str, artifact: Artifact) -> bool:
+    return isinstance(artifact, MergedHex) or is_serial_recovery(config)
+
+
+def second_loader(
+    config: str, base: str, artifact: Artifact, has_signed: bool
+) -> SecondLoader | None:
+    """The serial-recovery app payload, or ``None`` for single-loader fixtures.
+
+    Only the code-only MCUboot ``Hex`` can carry a second loader: its NOLOAD
+    ``mock_flash`` region is absent from the hex, so the signed app drops into
+    slot0's backing store with no ROM-region overlap. The ``Elf`` fallback boots
+    as a plain ``-kernel`` image (the app is uploaded over SMP instead).
+
+    >>> boot_hex = Hex("BASE.hex", MCUBOOT_HEX_REL)
+    >>> boot_elf = Elf("BASE.elf", MCUBOOT_ELF_REL)
+    >>> second_loader("serial_recovery", "BASE", boot_hex, True)
+    SecondLoader(file='BASE.signed.bin', addr='0x20050000')
+    >>> second_loader("serial", "BASE", boot_hex, True) is None
+    True
+    >>> second_loader("serial_recovery", "BASE", boot_elf, True) is None
+    True
+    >>> second_loader("serial_recovery", "BASE", boot_hex, False) is None
+    True
+    """
+    if not (is_serial_recovery(config) and has_signed and isinstance(artifact, Hex)):
+        return None
+    return SecondLoader(file=f"{base}.signed.bin", addr=SLOT0_MOCK_FLASH_ADDR)
 
 
 def run_command(artifact: Artifact) -> str | None:
@@ -236,14 +290,23 @@ def qemu_load(artifact: Artifact) -> str:
             assert_never(artifact)
 
 
-def qemu_command(target: str, artifact: Artifact) -> str | None:
+def qemu_command(target: str, artifact: Artifact, payload: SecondLoader | None) -> str | None:
+    """The QEMU launch command, single- or (serial-recovery) two-loader.
+
+    With a ``payload`` the SMP socket keeps uart0 while uart1 (the log) is wired
+    to ``null``, then MCUboot's code-only hex loads and the signed app is dropped
+    into slot0's ``mock_flash`` backing store at ``payload.addr`` -- booting
+    straight to the app with no upload.
+    """
     machine = QEMU_MACHINES.get(target)
     if machine is None:
         return None
+    serial = "-serial chardev:con" if payload is None else "-serial chardev:con -serial null"
+    extra = "" if payload is None else f" -device loader,file={payload.file},addr={payload.addr}"
     return (
         f"qemu-system-arm -cpu {machine.cpu} -machine {machine.machine} -nographic "
         f"-chardev socket,id=con,host=127.0.0.1,port=<PORT>,server=on,wait=off "
-        f"-serial chardev:con -monitor none {qemu_load(artifact)}"
+        f"{serial} -monitor none {qemu_load(artifact)}{extra}"
     )
 
 
@@ -264,7 +327,9 @@ def enabled_groups(cfg: Kconfig) -> tuple[Group, ...]:
     return tuple(name for key, name in GROUP_CONFIGS if cfg.is_set(key))
 
 
-def make_entry(config: str, target: str, artifact: Artifact, cfg: Kconfig) -> ManifestEntry:
+def make_entry(
+    config: str, target: str, base: str, artifact: Artifact, outputs: BuildOutputs, cfg: Kconfig
+) -> ManifestEntry:
     return ManifestEntry(
         artifact=artifact.name,
         target=target,
@@ -276,10 +341,12 @@ def make_entry(config: str, target: str, artifact: Artifact, cfg: Kconfig) -> Ma
         line_length_max=cfg.get_int("CONFIG_UART_MCUMGR_RX_BUF_SIZE"),
         udp_port=cfg.get_int("CONFIG_MCUMGR_TRANSPORT_UDP_PORT"),
         groups=enabled_groups(cfg),
-        mcuboot=is_mcuboot(artifact),
-        serial_recovery=config == "serial_recovery",
+        mcuboot=is_mcuboot(config, artifact),
+        serial_recovery=is_serial_recovery(config),
         run=run_command(artifact),
-        qemu_cmd=qemu_command(target, artifact),
+        qemu_cmd=qemu_command(
+            target, artifact, second_loader(config, base, artifact, outputs.has_signed)
+        ),
     )
 
 
@@ -294,7 +361,8 @@ def gather_outputs(build_dir: Path) -> BuildOutputs:
         merged_hexes=tuple(sorted(path.name for path in build_dir.glob("merged_*.hex"))),
         has_hex=(build_dir / "zephyr" / "zephyr.hex").is_file(),
         has_elf=(build_dir / "zephyr" / "zephyr.elf").is_file(),
-        has_mcuboot_elf=(build_dir / "mcuboot" / "zephyr" / "zephyr.elf").is_file(),
+        has_mcuboot_hex=(build_dir / MCUBOOT_HEX_REL).is_file(),
+        has_mcuboot_elf=(build_dir / MCUBOOT_ELF_REL).is_file(),
         has_signed=(build_dir / SIGNED_REL).is_file(),
     )
 
@@ -317,7 +385,7 @@ def process_build_dir(
     shutil.copy(build_dir / artifact.src, out_dir / artifact.name)
     if outputs.has_signed:
         shutil.copy(build_dir / SIGNED_REL, out_dir / f"{base}.signed.bin")
-    return make_entry(config, target, artifact, read_kconfig(build_dir))
+    return make_entry(config, target, base, artifact, outputs, read_kconfig(build_dir))
 
 
 def discover_build_dirs(twister_out: Path) -> list[Path]:

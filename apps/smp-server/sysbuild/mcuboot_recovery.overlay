@@ -1,31 +1,105 @@
 /*
- * MCUboot image flash layout for the serial-recovery fixture. Must match the
- * application's flash partitions (apps/smp-server/boards/mps2_an385.overlay):
- * the same boot/slot0/slot1 table on the flash simulator, so MCUboot's recovery
- * server writes the uploaded image where the app expects it. Routes recovery
- * SMP to uart0.
+ * MCUboot image DT for the do-it-all serial-recovery fixture (RAM_LOAD).
+ * Must agree with the application's memory map (mps2_an385_ramload_app.overlay).
+ *
+ * Two flashes, mirroring real hardware:
+ *   flash0     (soc-nv-flash @ 0x0)  -- XIP: MCUboot's own code lives here, so
+ *                                       QEMU loads it at the reset vector.
+ *   flash_sim0 (sim-flash)           -- the writable image slots + storage. Its
+ *                                       backing store is the FlashSim SRAM
+ *                                       memory-region; the driver indexes it by
+ *                                       a 0-based offset, so the DT reg base is 0.
+ *
+ * SRAM (4 MB) layout, shared by both images:
+ *   0x20000000  256K  mcuboot runtime (.bss/stack while it loads the app)
+ *   0x20040000  2M    FlashSim     -- sim-flash backing store; a memory-region
+ *                                     means it is NOT erased at boot, so an
+ *                                     uploaded slot0 survives the soft reset
+ *   0x20240000  ~1.7M app RAM exec region (the imgtool load address)
+ *   0x203ffc00  1K    RetainedMem  -- MCUboot shared boot info + boot mode
  */
+/delete-node/ &sram0;
+/delete-node/ &storage_partition;
+
 / {
+	sram0: memory@20000000 {
+		compatible = "mmio-sram";
+		reg = <0x20000000 0x00040000>;	/* mcuboot runtime: low 256 KB */
+	};
+
+	flash_sim_region: memory@20040000 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x20040000 0x00200000>;	/* 2 MB sim-flash backing store */
+		ranges = <0x0 0x20040000 0x00200000>;
+		zephyr,memory-region = "FlashSim";
+		status = "okay";
+		#address-cells = <1>;
+		#size-cells = <1>;
+	};
+
+	sram_retained: memory@203ffc00 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x203ffc00 0x00000400>;
+		ranges = <0x0 0x203ffc00 0x00000400>;
+		zephyr,memory-region = "RetainedMem";
+		status = "okay";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		retainedmem {
+			compatible = "zephyr,retained-ram";
+			status = "okay";
+			ranges;
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			boot_info0: boot_info@0 {
+				compatible = "zephyr,retention";
+				status = "okay";
+				reg = <0x0 0x100>;
+			};
+
+			boot_mode0: boot_mode@100 {
+				compatible = "zephyr,retention";
+				status = "okay";
+				reg = <0x100 0x10>;
+			};
+		};
+	};
+
 	chosen {
-		zephyr,uart-mcumgr = &uart0;
+		zephyr,uart-mcumgr = &uart0;	/* recovery SMP */
+		zephyr,console = &uart1;	/* boot log, separate from SMP */
+		zephyr,bootloader-info = &boot_info0;
+		zephyr,boot-mode = &boot_mode0;
+		zephyr,code-partition = &boot_partition;
 	};
 };
 
-/delete-node/ &storage_partition;
-
+/*
+ * MCUboot's code runs XIP from flash0 @ 0x0 (zephyr,flash -> FLASH_BASE_ADDRESS;
+ * QEMU loads it at the reset vector). boot_partition only supplies the link
+ * offset (its reg offset is 0 -> FLASH_LOAD_OFFSET = 0); it lives in the
+ * sim-flash so its flash_area has a real controller, but MCUboot never reads its
+ * own code through it.
+ *
+ * The sim-flash driver indexes its backing store (the FlashSim memory-region at
+ * SRAM 0x20040000) by a 0-based offset, so the reg base is 0. slot0's bytes live
+ * at FlashSim + 0x10000 = physical SRAM 0x20050000.
+ */
 &flash_sim0 {
-	reg = <0x00000000 0x00200000>;	/* 2 MB */
+	reg = <0x00000000 0x00200000>;	/* 2 MB, FlashSim backing store */
 	erase-block-size = <4096>;
 	write-block-size = <4>;
 
 	partitions {
 		boot_partition: partition@0 {
 			label = "mcuboot";
-			reg = <0x00000000 0x00010000>;	/* 64 KB */
+			reg = <0x00000000 0x00010000>;	/* 64 KB; link offset only */
 		};
 		slot0_partition: partition@10000 {
 			label = "image-0";
-			reg = <0x00010000 0x00080000>;	/* 512 KB */
+			reg = <0x00010000 0x00080000>;	/* 512 KB -> SRAM 0x20050000 */
 		};
 		slot1_partition: partition@90000 {
 			label = "image-1";
@@ -36,4 +110,9 @@
 			reg = <0x00110000 0x00040000>;	/* 256 KB */
 		};
 	};
+};
+
+/* Persist the sim-flash across reboot (no erase-at-start with a memory-region). */
+&sim_flash_controller {
+	memory-region = <&flash_sim_region>;
 };
