@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   check-script:
-    name: Lint + type-check + test the fixture collector
+    name: Lint + type-check + test the fixture collector + release validator
     runs-on: ubuntu-24.04
     env:
       UV_PYTHON: '3.13'  # match the script's requires-python and the build leg
@@ -30,7 +30,9 @@ jobs:
         run: |
           uvx ruff check .
           uvx ruff format --check .
-          uvx --with pytest mypy --strict collect_fixtures.py test_collect_fixtures.py
+          uvx --with pytest mypy --strict \
+            collect_fixtures.py test_collect_fixtures.py \
+            validate_release.py test_validate_release.py
           uvx pytest
 
   build:
@@ -113,6 +115,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Checkout is for the release validator script only; the assets come from
+      # the build artifacts, not the tree.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -127,6 +135,20 @@ jobs:
       - name: Checksums
         working-directory: artifacts
         run: sha256sum * > SHA256SUMS
+
+      - uses: astral-sh/setup-uv@v8.1.0
+
+      # Provenance + manifest guard (issue #4): fail before publishing if the
+      # gathered assets mix build SHAs or disagree with manifest.json, so a
+      # release can never silently accumulate stale, multi-SHA, manifest-less
+      # assets the way the retired rolling 'latest' tag did.
+      - name: Validate release provenance + manifest
+        env:
+          UV_PYTHON: '3.13'
+        run: |
+          uv run .github/scripts/validate_release.py \
+            --manifest artifacts/manifest.json --assets-dir artifacts \
+            --git-sha "$GITHUB_SHA"
 
       - id: sha
         run: echo "short=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
