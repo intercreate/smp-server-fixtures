@@ -14,6 +14,7 @@ ships a machine-readable [`manifest.json`](#manifest) describing every fixture.
 | --- | --- | --- |
 | **Base** (`serial`, `serial_raw`, `udp`) | native_sim | Every command group the target can host; default buffers. |
 | **Buffer-size matrix** (`serial_buf<N>`, `udp_buf<N>`) | native_sim, qemu | Sweep `buf_size` = 96, 128, 256, 400, 512, 1024, 2048 to validate fragmentation/reassembly and client buffer math (incl. a non-multiple of the line length and an edge below it). |
+| **mps2 buffer matrix** (`serial_recovery_buf<N>`) | mps2 | The do-it-all recovery image (below) swept across `buf_size` = 400, 512, 1024, 2048. mps2's UART paces the link and its 4 MB SRAM clears the RAM ceiling, so it round-trips a real buffer-filling message — by echo, fs upload, or img (DFU) upload — at sizes where native_sim is bursty and qemu_cortex_m0 is too small. |
 | **`serial_bigrx`** | native_sim | Default buffers but a large UART RX pool — receives full multi-fragment messages the small default pool would drop. |
 | **`serial_line512`** | native_sim | Accepts long (512 B) serial frame lines, for non-default client line lengths. |
 | **`serial_noparams`** | native_sim | MCUmgr params command disabled — exercises the client's fallback when `buf_size` can't be read. |

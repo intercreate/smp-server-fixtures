@@ -235,7 +235,22 @@ class SecondLoader(NamedTuple):
 
 
 def is_serial_recovery(config: str) -> bool:
-    return config == SERIAL_RECOVERY_CONFIG
+    """Whether ``config`` is a do-it-all MCUboot serial-recovery fixture.
+
+    Matches the base ``serial_recovery`` and its buffer-matrix variants
+    (``serial_recovery_buf512`` ...), which share the two-loader RAM_LOAD scheme
+    but sweep ``CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE``.
+
+    >>> is_serial_recovery("serial_recovery")
+    True
+    >>> is_serial_recovery("serial_recovery_buf512")
+    True
+    >>> is_serial_recovery("serial")
+    False
+    >>> is_serial_recovery("serial_buf512")
+    False
+    """
+    return config == SERIAL_RECOVERY_CONFIG or config.startswith(f"{SERIAL_RECOVERY_CONFIG}_")
 
 
 def is_mcuboot(config: str, artifact: Artifact) -> bool:
