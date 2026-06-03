@@ -1,6 +1,6 @@
-# Tooling config for the fixture collector. Not a package — these tables are
-# read by ruff / mypy / pytest, which (unlike `uv run`) do not honour PEP 723
-# inline `[tool.*]` metadata. See collect_fixtures.py for the script itself.
+# Tooling config for the fixture collector + release validator. Not a package —
+# these tables are read by ruff / mypy / pytest, which (unlike `uv run`) do not
+# honour PEP 723 inline `[tool.*]` metadata. See the scripts for themselves.
 
 [tool.ruff]
 target-version = "py313"
@@ -10,12 +10,17 @@ line-length = 100
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ANN", "PTH", "TID"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["collect_fixtures"]
+known-first-party = ["collect_fixtures", "validate_release"]
 
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["collect_fixtures.py", "test_collect_fixtures.py"]
+files = [
+    "collect_fixtures.py",
+    "test_collect_fixtures.py",
+    "validate_release.py",
+    "test_validate_release.py",
+]
 
 [tool.pytest.ini_options]
 addopts = "--doctest-modules"

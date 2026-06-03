@@ -49,6 +49,16 @@ tagged by its commit SHA, and the newest is always marked as the repo's
 — so `releases/latest/download/manifest.json` always resolves the most recent
 build. Download what you need, or build locally (below).
 
+Each release is self-contained: a CI guard
+([`validate_release.py`](.github/scripts/validate_release.py)) fails the publish
+unless **every** asset carries that build's SHA and every image has a
+`manifest.json` entry, so a release can't mix SHAs or ship a fixture the
+manifest doesn't describe. Resolve the floating "latest" via GitHub's pointer
+(`releases/latest/download/...`) or pin a specific build by its SHA tag (e.g.
+`gh release download <sha>`) for a frozen reference. There is no rolling tag
+literally named `latest`; the only "latest" is GitHub's own newest-release
+pointer.
+
 ## Manifest
 
 Each release includes `manifest.json`: an array with one entry per fixture, so a
