@@ -21,17 +21,18 @@ ships a machine-readable [`manifest.json`](#manifest) describing every fixture.
 | **`udp6`** | native_sim | UDP over IPv6 (`[::1]:1337`). |
 | **`serial_fs`, `udp_fs`** | native_sim | littlefs mounted at `/lfs1` for fs-group file upload/download. |
 | **`serial`** (roomy) | mps2 | Cortex-M3, 4 MB SRAM via a flash overlay: one runnable image with **every** non-img group, fs file round-trips, and large buffers. |
+| **`serial_recovery`** | mps2 | Runnable MCUboot **serial recovery** — boot the `.elf`; with no app present it stays in the bootloader's SMP server. Upload the paired `.signed.bin` to exercise the recovery path. |
 | **`serial`** | qemu_cortex_m0 | Merged MCUboot + signed app — exercises the img (DFU) group under emulation. |
-| **`serial`, `ble`, `serial_recovery`** | nrf52840dk | Build-only images for a hardware bench. `serial_recovery` is MCUboot serial recovery (the bootloader's own SMP server). |
+| **`serial`, `ble`, `serial_recovery`** | nrf52840dk | Build-only images for a hardware bench. |
 
 The authoritative, per-release list (with each fixture's transport, buffers,
 groups, and launch command) is the [manifest](#manifest). Fixtures are defined
 in [`apps/smp-server/sample.yaml`](apps/smp-server/sample.yaml).
 
-> **MCUboot serial recovery** currently ships build-only for hardware. The
-> nRF51 QEMU (16 KB RAM) cannot host it; a runnable emulated recovery image on
-> mps2 (via MCUboot RAM_LOAD + a retained-memory boot-mode entry) is in
-> progress.
+> A single emulated image that boots the full app **and** re-enters recovery on
+> demand (MCUboot RAM_LOAD + `os reset boot_mode`) is in progress — it needs the
+> `boot_mode` field across the SMP stack (smp/smpclient/smpmgr) and a fix for
+> the RAM_LOAD boot path on QEMU mps2.
 
 ## Get a fixture
 

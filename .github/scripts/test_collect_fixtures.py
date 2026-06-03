@@ -21,6 +21,7 @@ def make_outputs(
     merged_hexes: tuple[str, ...] = (),
     has_hex: bool = False,
     has_elf: bool = False,
+    has_mcuboot_elf: bool = False,
     has_signed: bool = False,
 ) -> cf.BuildOutputs:
     return cf.BuildOutputs(
@@ -28,6 +29,7 @@ def make_outputs(
         merged_hexes=merged_hexes,
         has_hex=has_hex,
         has_elf=has_elf,
+        has_mcuboot_elf=has_mcuboot_elf,
         has_signed=has_signed,
     )
 
@@ -152,6 +154,20 @@ def test_select_artifact_elf_only() -> None:
     assert isinstance(cf.select_artifact(make_outputs(has_elf=True), "BASE"), cf.Elf)
 
 
+def test_select_artifact_mcuboot_elf_fallback() -> None:
+    # Serial-recovery fixture: only MCUboot's own elf is present.
+    art = cf.select_artifact(make_outputs(has_mcuboot_elf=True), "BASE")
+    assert isinstance(art, cf.Elf)
+    assert art.name == "BASE.elf"
+    assert art.src == "mcuboot/zephyr/zephyr.elf"
+
+
+def test_select_artifact_zephyr_elf_beats_mcuboot_elf() -> None:
+    art = cf.select_artifact(make_outputs(has_elf=True, has_mcuboot_elf=True), "BASE")
+    assert isinstance(art, cf.Elf)
+    assert art.src == "zephyr/zephyr.elf"
+
+
 def test_select_artifact_none() -> None:
     assert cf.select_artifact(make_outputs(), "BASE") is None
 
@@ -268,6 +284,37 @@ def test_process_mps2_elf(tmp_path: Path) -> None:
     assert entry.run is None
     assert entry.qemu_cmd is not None
     assert "-kernel " in entry.qemu_cmd
+
+
+def test_process_serial_recovery_mps2(tmp_path: Path) -> None:
+    # Runnable mps2 serial recovery: MCUboot is the bootable image
+    # (mcuboot/zephyr/zephyr.elf); the app ships only as .signed.bin. No merged hex.
+    out = tmp_path / "out"
+    out.mkdir()
+    build_dir = make_build_dir(
+        tmp_path,
+        "smp_server.fixture.serial_recovery.mps2_an385",
+        files={
+            "mcuboot/zephyr/zephyr.elf": "x",
+            "smp-server/zephyr/.config": (
+                "CONFIG_MCUMGR_TRANSPORT_UART=y\nCONFIG_MCUMGR_GRP_IMG=y\n"
+            ),
+            "smp-server/zephyr/zephyr.signed.bin": "x",
+        },
+    )
+    entry = cf.process_build_dir(build_dir, "4.4.0", "05e7c6bddead", out)
+    assert entry is not None
+    assert entry.artifact == "zephyr_4.4.0_smp_server_05e7c6bd_mps2_an385_serial_recovery.elf"
+    assert entry.serial_recovery is True
+    assert entry.mcuboot is False
+    assert entry.transport == "serial"
+    assert entry.run is None
+    assert entry.qemu_cmd is not None
+    assert "-cpu cortex-m3 -machine mps2-an385" in entry.qemu_cmd
+    assert entry.qemu_cmd.endswith("-kernel " + entry.artifact)
+    assert (out / entry.artifact).is_file()
+    signed = out / (entry.artifact.removesuffix(".elf") + ".signed.bin")
+    assert signed.is_file()
 
 
 def test_process_skips_image_less_stub(tmp_path: Path) -> None:

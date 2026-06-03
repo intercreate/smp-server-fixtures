@@ -406,3 +406,25 @@ tests:
       - mcuboot_CONFIG_BOOT_SERIAL_WAIT_FOR_DFU=y
       - mcuboot_CONFIG_BOOT_SERIAL_WAIT_FOR_DFU_TIMEOUT=600000
       - mcuboot_CONFIG_UART_CONSOLE=n
+
+  # Runnable serial recovery on emulated mps2/an385: MCUboot boots its own SMP
+  # server and, with no valid application present, stays in serial recovery.
+  # Upload the matching .signed.bin to the bootloader to exercise the recovery
+  # path. FILE_SUFFIX="recovery" pulls in the mcuboot-side flash layout + config
+  # (sysbuild/mcuboot_recovery.{conf,overlay}); the app builds/signs for slot0.
+  smp_server.fixture.serial_recovery.mps2_an385:
+    sysbuild: true
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - FILE_SUFFIX="recovery"
+      - >-
+        EXTRA_CONF_FILE="serial.conf;
+        grp_os.conf;
+        grp_stat.conf;
+        grp_enum.conf;
+        grp_img.conf"
+      - EXTRA_DTC_OVERLAY_FILE="mps2_an385_codepart.overlay"
+      - SB_CONFIG_BOOTLOADER_MCUBOOT=y
+      - SB_CONFIG_MCUBOOT_MODE_OVERWRITE_ONLY=y
+      - SB_CONFIG_BOOT_SIGNATURE_TYPE_NONE=y

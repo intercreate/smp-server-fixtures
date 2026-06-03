@@ -95,6 +95,7 @@ class BuildOutputs(NamedTuple):
     merged_hexes: tuple[str, ...]
     has_hex: bool
     has_elf: bool
+    has_mcuboot_elf: bool
     has_signed: bool
 
 
@@ -186,7 +187,9 @@ def select_artifact(outputs: BuildOutputs, base: str) -> Artifact | None:
     combination as a contradiction rather than silently preferring one. Real
     sysbuild dirs do legitimately carry ``merged.hex`` alongside ``zephyr.hex``
     and ``zephyr.elf``, so those fall through to the priority
-    ``merged.hex > exe > hex > elf`` (``.elf`` is the no-.hex emulated fallback).
+    ``merged.hex > exe > hex > elf > mcuboot/zephyr/zephyr.elf``. The last is the
+    serial-recovery fixture, where MCUboot itself is the bootable image and the
+    app ships only as a ``.signed.bin`` to upload to it.
     """
     if outputs.has_exe and outputs.merged_hexes:
         raise CollectError(
@@ -202,6 +205,8 @@ def select_artifact(outputs: BuildOutputs, base: str) -> Artifact | None:
         return Hex(name=f"{base}.hex", src="zephyr/zephyr.hex")
     if outputs.has_elf:
         return Elf(name=f"{base}.elf", src="zephyr/zephyr.elf")
+    if outputs.has_mcuboot_elf:
+        return Elf(name=f"{base}.elf", src="mcuboot/zephyr/zephyr.elf")
     return None
 
 
@@ -289,6 +294,7 @@ def gather_outputs(build_dir: Path) -> BuildOutputs:
         merged_hexes=tuple(sorted(path.name for path in build_dir.glob("merged_*.hex"))),
         has_hex=(build_dir / "zephyr" / "zephyr.hex").is_file(),
         has_elf=(build_dir / "zephyr" / "zephyr.elf").is_file(),
+        has_mcuboot_elf=(build_dir / "mcuboot" / "zephyr" / "zephyr.elf").is_file(),
         has_signed=(build_dir / SIGNED_REL).is_file(),
     )
 
