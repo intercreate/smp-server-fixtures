@@ -18,6 +18,8 @@ jobs:
   check-script:
     name: Lint + type-check + test the fixture collector
     runs-on: ubuntu-24.04
+    env:
+      UV_PYTHON: '3.13'  # match the script's requires-python and the build leg
     steps:
       - uses: actions/checkout@v6
         with:

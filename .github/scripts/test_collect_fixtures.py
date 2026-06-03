@@ -123,10 +123,16 @@ def test_kconfig_get_str_strips_quotes() -> None:
     assert kconfig('CONFIG_S="hello"').get_str("CONFIG_S") == "hello"
 
 
-def test_select_artifact_merged_beats_exe() -> None:
+def test_select_artifact_rejects_exe_with_merged() -> None:
+    # Host .exe + flashed-MCU merged image is a cross-target contradiction.
+    with pytest.raises(cf.CollectError):
+        cf.select_artifact(make_outputs(has_exe=True, merged_hexes=("merged_a.hex",)), "BASE")
+
+
+def test_select_artifact_sysbuild_merged_with_companions() -> None:
+    # Real sysbuild firmware: merged.hex alongside its zephyr.hex/.elf companions.
     art = cf.select_artifact(
-        make_outputs(has_exe=True, merged_hexes=("merged_a.hex",), has_hex=True, has_elf=True),
-        "BASE",
+        make_outputs(merged_hexes=("merged_a.hex",), has_hex=True, has_elf=True), "BASE"
     )
     assert isinstance(art, cf.MergedHex)
     assert art.name == "BASE.merged.hex"

@@ -181,9 +181,17 @@ def canonical_basename(zephyr_version: str, git_sha: str, target: str, config: s
 def select_artifact(outputs: BuildOutputs, base: str) -> Artifact | None:
     """Choose the one primary image for a build dir (``None`` => skip the dir).
 
-    Precedence is ``merged.hex > exe > hex > elf``; the kinds are mutually
-    exclusive for real Twister output, so this is total and unambiguous.
+    A merged MCUboot image and a native_sim ``.exe`` come from different target
+    classes (a flashed MCU vs the host) and never coexist, so treat the
+    combination as a contradiction rather than silently preferring one. Real
+    sysbuild dirs do legitimately carry ``merged.hex`` alongside ``zephyr.hex``
+    and ``zephyr.elf``, so those fall through to the priority
+    ``merged.hex > exe > hex > elf`` (``.elf`` is the no-.hex emulated fallback).
     """
+    if outputs.has_exe and outputs.merged_hexes:
+        raise CollectError(
+            f"build dir has both a native_sim .exe and a merged image: {outputs.merged_hexes}"
+        )
     if outputs.merged_hexes:
         if len(outputs.merged_hexes) > 1:
             raise CollectError(f"multiple merged_*.hex in build dir: {outputs.merged_hexes}")
