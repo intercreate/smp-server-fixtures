@@ -1,0 +1,39 @@
+/*
+ * MCUboot image flash layout for the serial-recovery fixture. Must match the
+ * application's flash partitions (apps/smp-server/boards/mps2_an385.overlay):
+ * the same boot/slot0/slot1 table on the flash simulator, so MCUboot's recovery
+ * server writes the uploaded image where the app expects it. Routes recovery
+ * SMP to uart0.
+ */
+/ {
+	chosen {
+		zephyr,uart-mcumgr = &uart0;
+	};
+};
+
+/delete-node/ &storage_partition;
+
+&flash_sim0 {
+	reg = <0x00000000 0x00200000>;	/* 2 MB */
+	erase-block-size = <4096>;
+	write-block-size = <4>;
+
+	partitions {
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 0x00010000>;	/* 64 KB */
+		};
+		slot0_partition: partition@10000 {
+			label = "image-0";
+			reg = <0x00010000 0x00080000>;	/* 512 KB */
+		};
+		slot1_partition: partition@90000 {
+			label = "image-1";
+			reg = <0x00090000 0x00080000>;	/* 512 KB */
+		};
+		storage_partition: partition@110000 {
+			label = "storage";
+			reg = <0x00110000 0x00040000>;	/* 256 KB */
+		};
+	};
+};

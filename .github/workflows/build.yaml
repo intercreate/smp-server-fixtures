@@ -87,6 +87,10 @@ jobs:
             elif [ -z "$artifact" ] && [ -f "$d/zephyr/zephyr.elf" ]; then
               # Emulated targets that emit no .hex (e.g. mps2) ship the ELF; QEMU runs it with -kernel.
               cp "$d/zephyr/zephyr.elf" "${base}.elf"; artifact="$(basename "${base}.elf")"
+            elif [ -z "$artifact" ] && [ -f "$d/mcuboot/zephyr/zephyr.elf" ]; then
+              # Serial-recovery fixture: MCUboot itself is the bootable image (boots to
+              # recovery); the .signed.bin below is the image to upload to it.
+              cp "$d/mcuboot/zephyr/zephyr.elf" "${base}.elf"; artifact="$(basename "${base}.elf")"
             fi
             signed="$d/smp-server/zephyr/zephyr.signed.bin"
             [ -f "$signed" ] && cp "$signed" "${base}.signed.bin"

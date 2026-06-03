@@ -1,0 +1,10 @@
+/*
+ * Applied to the application image of mps2/an385 MCUboot fixtures (not the bare
+ * serial/shell fixtures): build/sign the app for slot0 so MCUboot's serial
+ * recovery server has a valid image to receive. Passed via EXTRA_DTC_OVERLAY_FILE.
+ */
+/ {
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+	};
+};
