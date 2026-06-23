@@ -23,6 +23,7 @@ ships a machine-readable [`manifest.json`](#manifest) describing every fixture.
 | **`serial_fs`, `udp_fs`** | native_sim | littlefs mounted at `/lfs1` for fs-group file upload/download. |
 | **`serial`** (roomy) | mps2 | Cortex-M3, 4 MB SRAM via a flash overlay: one runnable image with **every** non-img group, fs file round-trips, and large buffers. |
 | **`serial_recovery`** | mps2 | Do-it-all MCUboot RAM_LOAD image — boots **straight into the full app** (every group incl. img) serving SMP on uart0 and logging on uart1. `os reset boot_mode=1` re-enters MCUboot **serial recovery** on demand; an upload there persists across the soft reset (slots live in a non-erased RAM-backed flash simulator). Launched with two QEMU loaders: the MCUboot `.hex` plus the `.signed.bin` dropped into slot0. |
+| **`serial_recovery_raw`** | mps2 | The `serial_recovery` image, but both MCUboot recovery and the app speak the **raw** (non-console) SMP serial encoding — no base64/CRC/console framing, packets framed by the SMP header length (`CONFIG_BOOT_SERIAL_RAW_PROTOCOL` + `CONFIG_UART_MCUMGR_RAW_PROTOCOL`). For testing a client's raw serial transport against a real recovery server. Same two-loader launch as `serial_recovery`. |
 | **`serial`** | qemu_cortex_m0 | Merged MCUboot + signed app — exercises the img (DFU) group under emulation. |
 | **`serial`, `ble`, `serial_recovery`** | nrf52840dk | Build-only images for a hardware bench. |
 

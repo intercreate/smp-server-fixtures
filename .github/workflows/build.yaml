@@ -89,7 +89,11 @@ jobs:
           # Canonical names + manifest are produced by a typed, unit-tested
           # script (.github/scripts/); the check-script job gates it on ruff +
           # mypy --strict + pytest. west stays here: it must run in the workspace.
+          # The zephyr label is a release tag verbatim (e.g. 4.4.0); a pinned main
+          # commit (we track a post-v4.4.0 main SHA for mcuboot#2755's raw serial
+          # recovery) is shortened to 12 chars so fixture names stay readable.
           ver=$(west list zephyr --format='{revision}'); ver=${ver#v}
+          if [ "${#ver}" -ge 40 ]; then ver=${ver:0:12}; fi
           uv run .github/scripts/collect_fixtures.py \
             --git-sha "$GITHUB_SHA" --zephyr-version "$ver" \
             --leg "${{ matrix.leg }}" --twister-out twister-out --out-dir fixtures

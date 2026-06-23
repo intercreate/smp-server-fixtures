@@ -245,6 +245,8 @@ def is_serial_recovery(config: str) -> bool:
     True
     >>> is_serial_recovery("serial_recovery_buf512")
     True
+    >>> is_serial_recovery("serial_recovery_raw")
+    True
     >>> is_serial_recovery("serial")
     False
     >>> is_serial_recovery("serial_buf512")
