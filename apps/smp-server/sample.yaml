@@ -444,6 +444,44 @@ tests:
       - &mps2_doitall_mcuboot_log mcuboot_CONFIG_LOG_DEFAULT_LEVEL=4
       - &mps2_doitall_mcuboot_dbg mcuboot_CONFIG_MCUBOOT_LOG_LEVEL_DBG=y
 
+  # Raw (non-console) variant of the do-it-all recovery fixture: identical RAM_LOAD
+  # two-UART design, but both MCUboot recovery and the app speak the raw SMP serial
+  # encoding (no base64/CRC/console framing) instead of SMP-over-console -- for
+  # smpclient's SMPSerialRawTransport against a real recovery server (mcu-tools/
+  # mcuboot#2755, intercreate/smpclient#106). mcuboot_CONFIG_BOOT_SERIAL_RAW_PROTOCOL
+  # is MCUboot's counterpart of the app's CONFIG_UART_MCUMGR_RAW_PROTOCOL; both drop
+  # base64/CRC and frame packets by the SMP header length. The app swaps serial.conf
+  # for raw_serial.conf (raw transport on uart0); ramload.conf is still last, so it
+  # restores the uart1 console/log that raw_serial.conf turns off for a single-UART
+  # target. Same serial_recovery_* two-loader scheme (MCUboot's code-only hex plus
+  # the signed app dropped into slot0's RAM-backed sim-flash).
+  smp_server.fixture.serial_recovery_raw.mps2_an385:
+    sysbuild: true
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - *mps2_doitall_suffix
+      - >-
+        EXTRA_CONF_FILE="raw_serial.conf;
+        grp_os.conf;
+        grp_fs.conf;
+        grp_shell.conf;
+        grp_stat.conf;
+        grp_settings.conf;
+        grp_enum.conf;
+        grp_zbasic.conf;
+        grp_img.conf;
+        ramload.conf"
+      - *mps2_doitall_overlay
+      - *mps2_doitall_mcuboot
+      - *mps2_doitall_ramload
+      - *mps2_doitall_unsigned
+      - *mps2_doitall_hex
+      - *mps2_doitall_log
+      - *mps2_doitall_mcuboot_log
+      - *mps2_doitall_mcuboot_dbg
+      - mcuboot_CONFIG_BOOT_SERIAL_RAW_PROTOCOL=y
+
   # mps2/an385 buffer-size matrix on the do-it-all RAM_LOAD image: the same
   # every-group-incl-img recovery fixture above, swept across
   # CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE. mps2's UART paces the link (no PTY-burst

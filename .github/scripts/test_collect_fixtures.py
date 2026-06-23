@@ -416,6 +416,34 @@ def test_process_serial_recovery_buffer_matrix_mps2(tmp_path: Path) -> None:
     assert entry.qemu_cmd.count("-device loader") == 2
 
 
+def test_process_serial_recovery_raw_mps2(tmp_path: Path) -> None:
+    """Raw variant: the app's raw-UART transport makes the entry serial_raw while
+    it stays a two-loader serial-recovery mcuboot image."""
+    out = tmp_path / "out"
+    out.mkdir()
+    build_dir = make_build_dir(
+        tmp_path,
+        "smp_server.fixture.serial_recovery_raw.mps2_an385",
+        files={
+            "mcuboot/zephyr/zephyr.hex": "x",
+            "smp-server/zephyr/.config": (
+                "CONFIG_UART_MCUMGR_RAW_PROTOCOL=y\n"
+                "CONFIG_MCUMGR_TRANSPORT_RAW_UART=y\n"
+                "CONFIG_MCUMGR_GRP_IMG=y\n"
+            ),
+            "smp-server/zephyr/zephyr.signed.bin": "x",
+        },
+    )
+    entry = cf.process_build_dir(build_dir, "4.4.0", "05e7c6bddead", out)
+    assert entry is not None
+    assert entry.config == "serial_recovery_raw"
+    assert entry.transport == "serial_raw"
+    assert entry.serial_recovery is True
+    assert entry.mcuboot is True
+    assert entry.qemu_cmd is not None
+    assert entry.qemu_cmd.count("-device loader") == 2
+
+
 def test_process_serial_recovery_mps2_elf_fallback(tmp_path: Path) -> None:
     # A recovery build without the mcuboot hex still ships MCUboot's elf as a
     # single-loader -kernel image (the .signed.bin remains the upload payload).
