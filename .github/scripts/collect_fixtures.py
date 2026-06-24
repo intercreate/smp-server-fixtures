@@ -30,6 +30,9 @@ SERIAL_RECOVERY_CONFIG: Final = "serial_recovery"
 # slot0 mock_flash physical SRAM address for the mps2/an385 serial_recovery map:
 # FlashSim @ 0x20040000 + slot0 flash offset 0x10000.
 SLOT0_MOCK_FLASH_ADDR: Final = "0x20050000"
+# MCUboot's serial-recovery params command reassembles one command at a time, so it
+# always reports buf_count = 1 (boot_serial.c::bs_mcumgr_params); not a Kconfig.
+RECOVERY_BUF_COUNT: Final = 1
 
 
 class CollectError(Exception):
@@ -119,6 +122,8 @@ class ManifestEntry(NamedTuple):
     ip_family: IpFamily | None
     buf_size: int | None
     buf_count: int | None
+    recovery_buf_size: int | None
+    recovery_buf_count: int | None
     line_length_max: int | None
     udp_port: int | None
     groups: tuple[Group, ...]
@@ -344,9 +349,42 @@ def enabled_groups(cfg: Kconfig) -> tuple[Group, ...]:
     return tuple(name for key, name in GROUP_CONFIGS if cfg.is_set(key))
 
 
+def recovery_params(config: str, mcuboot_cfg: Kconfig) -> tuple[int | None, int | None]:
+    """The (buf_size, buf_count) the recovery server advertises, or (None, None).
+
+    Only a serial-recovery fixture whose MCUboot enables the MCUmgr params command
+    answers ``MCUMgrParametersRead`` while in recovery. The advertised buf_size is
+    the bootloader's decoded ceiling ``CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE`` --
+    distinct from the app's ``CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE`` -- and buf_count
+    is always 1.
+
+    >>> params_on = Kconfig(
+    ...     {"CONFIG_BOOT_MGMT_MCUMGR_PARAMS": "y", "CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE": "1024"}
+    ... )
+    >>> recovery_params("serial_recovery", params_on)
+    (1024, 1)
+    >>> recovery_params("serial_recovery_buf2048", params_on)
+    (1024, 1)
+    >>> recovery_params("serial", params_on)  # not a recovery fixture
+    (None, None)
+    >>> recovery_params("serial_recovery", Kconfig({"CONFIG_FOO": "y"}))  # params off
+    (None, None)
+    """
+    if not (is_serial_recovery(config) and mcuboot_cfg.is_set("CONFIG_BOOT_MGMT_MCUMGR_PARAMS")):
+        return None, None
+    return mcuboot_cfg.get_int("CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE"), RECOVERY_BUF_COUNT
+
+
 def make_entry(
-    config: str, target: str, base: str, artifact: Artifact, outputs: BuildOutputs, cfg: Kconfig
+    config: str,
+    target: str,
+    base: str,
+    artifact: Artifact,
+    outputs: BuildOutputs,
+    cfg: Kconfig,
+    mcuboot_cfg: Kconfig,
 ) -> ManifestEntry:
+    recovery_buf_size, recovery_buf_count = recovery_params(config, mcuboot_cfg)
     return ManifestEntry(
         artifact=artifact.name,
         target=target,
@@ -355,6 +393,8 @@ def make_entry(
         ip_family=ip_family(cfg),
         buf_size=cfg.get_int("CONFIG_MCUMGR_TRANSPORT_NETBUF_SIZE"),
         buf_count=cfg.get_int("CONFIG_MCUMGR_TRANSPORT_NETBUF_COUNT"),
+        recovery_buf_size=recovery_buf_size,
+        recovery_buf_count=recovery_buf_count,
         line_length_max=cfg.get_int("CONFIG_UART_MCUMGR_RX_BUF_SIZE"),
         udp_port=cfg.get_int("CONFIG_MCUMGR_TRANSPORT_UDP_PORT"),
         groups=enabled_groups(cfg),
@@ -390,6 +430,11 @@ def read_kconfig(build_dir: Path) -> Kconfig:
     return Kconfig.parse(cfg.read_text()) if cfg.is_file() else Kconfig({})
 
 
+def read_mcuboot_kconfig(build_dir: Path) -> Kconfig:
+    cfg = build_dir / "mcuboot" / "zephyr" / ".config"
+    return Kconfig.parse(cfg.read_text()) if cfg.is_file() else Kconfig({})
+
+
 def process_build_dir(
     build_dir: Path, zephyr_version: str, git_sha: str, out_dir: Path
 ) -> ManifestEntry | None:
@@ -402,7 +447,15 @@ def process_build_dir(
     shutil.copy(build_dir / artifact.src, out_dir / artifact.name)
     if outputs.has_signed:
         shutil.copy(build_dir / SIGNED_REL, out_dir / f"{base}.signed.bin")
-    return make_entry(config, target, base, artifact, outputs, read_kconfig(build_dir))
+    return make_entry(
+        config,
+        target,
+        base,
+        artifact,
+        outputs,
+        read_kconfig(build_dir),
+        read_mcuboot_kconfig(build_dir),
+    )
 
 
 def discover_build_dirs(twister_out: Path) -> list[Path]:

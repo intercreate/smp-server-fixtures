@@ -406,6 +406,9 @@ tests:
       - mcuboot_CONFIG_BOOT_SERIAL_WAIT_FOR_DFU=y
       - mcuboot_CONFIG_BOOT_SERIAL_WAIT_FOR_DFU_TIMEOUT=600000
       - mcuboot_CONFIG_UART_CONSOLE=n
+      # Recovery advertises MCUmgr params for buffer negotiation (see
+      # sysbuild/mcuboot_recovery.conf, which carries this for the mps2 fixtures).
+      - mcuboot_CONFIG_BOOT_MGMT_MCUMGR_PARAMS=y
 
   # Do-it-all emulated fixture on mps2/an385: one MCUboot RAM_LOAD image hosting
   # every command group (incl. img). MCUboot serves serial recovery SMP on uart0
@@ -492,7 +495,10 @@ tests:
   # round-trips three ways at each size: an os echo, an fs upload, and an img
   # (DFU) upload. 400 is the non-multiple of the 128 B client line length. Same
   # serial_recovery_* scheme as above (two QEMU loaders: MCUboot's code-only hex
-  # plus the signed app dropped into slot0's RAM-backed sim-flash).
+  # plus the signed app dropped into slot0's RAM-backed sim-flash). The sweep is
+  # app-side only: the bootloader's recovery server keeps its constant advertised
+  # buf_size (BOOT_SERIAL_MAX_RECEIVE_SIZE) across the matrix -- the netbuf size
+  # here is what the *app* reports once loaded, not what recovery advertises.
   smp_server.fixture.serial_recovery_buf400.mps2_an385:
     sysbuild: true
     platform_allow: [mps2/an385]

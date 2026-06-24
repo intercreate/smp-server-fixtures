@@ -260,6 +260,31 @@ def test_is_serial_recovery_matches_base_and_buffer_matrix() -> None:
     assert cf.is_serial_recovery("serial_buf512") is False
 
 
+def test_recovery_params_advertised_when_params_enabled() -> None:
+    # buf_size is the bootloader's BOOT_SERIAL_MAX_RECEIVE_SIZE (a decoded ceiling),
+    # not the app's netbuf; buf_count is always 1. Holds across the buffer matrix.
+    mcuboot_cfg = kconfig(
+        "CONFIG_BOOT_MGMT_MCUMGR_PARAMS=y",
+        "CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE=1024",
+    )
+    assert cf.recovery_params("serial_recovery", mcuboot_cfg) == (1024, 1)
+    assert cf.recovery_params("serial_recovery_raw", mcuboot_cfg) == (1024, 1)
+    assert cf.recovery_params("serial_recovery_buf2048", mcuboot_cfg) == (1024, 1)
+
+
+def test_recovery_params_none_when_disabled_or_not_recovery() -> None:
+    enabled = kconfig(
+        "CONFIG_BOOT_MGMT_MCUMGR_PARAMS=y",
+        "CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE=1024",
+    )
+    # A plain app fixture has no recovery server, so it advertises nothing here even
+    # if a stray bootloader symbol is present.
+    assert cf.recovery_params("serial", enabled) == (None, None)
+    # A recovery fixture whose bootloader leaves the params command off.
+    disabled = kconfig("CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE=1024")
+    assert cf.recovery_params("serial_recovery", disabled) == (None, None)
+
+
 def test_second_loader_for_serial_recovery_buffer_matrix() -> None:
     boot_hex = cf.Hex("BASE.hex", "mcuboot/zephyr/zephyr.hex")
     assert cf.second_loader("serial_recovery_buf2048", "BASE", boot_hex, True) == cf.SecondLoader(
@@ -284,6 +309,8 @@ def test_manifest_json_sorted_and_valid() -> None:
             ip_family=None,
             buf_size=None,
             buf_count=None,
+            recovery_buf_size=None,
+            recovery_buf_count=None,
             line_length_max=None,
             udp_port=None,
             groups=(),
@@ -360,6 +387,9 @@ def test_process_serial_recovery_mps2_two_loader(tmp_path: Path) -> None:
         "smp_server.fixture.serial_recovery.mps2_an385",
         files={
             "mcuboot/zephyr/zephyr.hex": "x",
+            "mcuboot/zephyr/.config": (
+                "CONFIG_BOOT_MGMT_MCUMGR_PARAMS=y\nCONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE=1024\n"
+            ),
             "smp-server/zephyr/.config": (
                 "CONFIG_MCUMGR_TRANSPORT_UART=y\nCONFIG_MCUMGR_GRP_IMG=y\n"
             ),
@@ -374,6 +404,11 @@ def test_process_serial_recovery_mps2_two_loader(tmp_path: Path) -> None:
     assert entry.mcuboot is True
     assert entry.transport == "serial"
     assert entry.run is None
+    # Recovery advertises the bootloader's params, surfaced separately from the app
+    # netbuf (which is unset here).
+    assert entry.recovery_buf_size == 1024
+    assert entry.recovery_buf_count == 1
+    assert entry.buf_size is None
 
     cmd = entry.qemu_cmd
     assert cmd is not None
@@ -398,6 +433,9 @@ def test_process_serial_recovery_buffer_matrix_mps2(tmp_path: Path) -> None:
         "smp_server.fixture.serial_recovery_buf2048.mps2_an385",
         files={
             "mcuboot/zephyr/zephyr.hex": "x",
+            "mcuboot/zephyr/.config": (
+                "CONFIG_BOOT_MGMT_MCUMGR_PARAMS=y\nCONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE=1024\n"
+            ),
             "smp-server/zephyr/.config": (
                 "CONFIG_MCUMGR_TRANSPORT_UART=y\n"
                 "CONFIG_MCUMGR_GRP_IMG=y\n"
@@ -414,6 +452,10 @@ def test_process_serial_recovery_buffer_matrix_mps2(tmp_path: Path) -> None:
     assert entry.mcuboot is True
     assert entry.qemu_cmd is not None
     assert entry.qemu_cmd.count("-device loader") == 2
+    # The matrix sweeps the app netbuf (2048) only; the bootloader's advertised
+    # recovery buf_size stays constant.
+    assert entry.recovery_buf_size == 1024
+    assert entry.recovery_buf_count == 1
 
 
 def test_process_serial_recovery_raw_mps2(tmp_path: Path) -> None:
@@ -426,6 +468,11 @@ def test_process_serial_recovery_raw_mps2(tmp_path: Path) -> None:
         "smp_server.fixture.serial_recovery_raw.mps2_an385",
         files={
             "mcuboot/zephyr/zephyr.hex": "x",
+            "mcuboot/zephyr/.config": (
+                "CONFIG_BOOT_SERIAL_RAW_PROTOCOL=y\n"
+                "CONFIG_BOOT_MGMT_MCUMGR_PARAMS=y\n"
+                "CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE=1024\n"
+            ),
             "smp-server/zephyr/.config": (
                 "CONFIG_UART_MCUMGR_RAW_PROTOCOL=y\n"
                 "CONFIG_MCUMGR_TRANSPORT_RAW_UART=y\n"
@@ -442,6 +489,10 @@ def test_process_serial_recovery_raw_mps2(tmp_path: Path) -> None:
     assert entry.mcuboot is True
     assert entry.qemu_cmd is not None
     assert entry.qemu_cmd.count("-device loader") == 2
+    # Raw recovery advertises the same params as encoded recovery (the difference is
+    # the client's framing, not the bootloader's buf_size).
+    assert entry.recovery_buf_size == 1024
+    assert entry.recovery_buf_count == 1
 
 
 def test_process_serial_recovery_mps2_elf_fallback(tmp_path: Path) -> None:

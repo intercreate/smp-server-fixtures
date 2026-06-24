@@ -22,7 +22,7 @@ ships a machine-readable [`manifest.json`](#manifest) describing every fixture.
 | **`udp6`** | native_sim | UDP over IPv6 (`[::1]:1337`). |
 | **`serial_fs`, `udp_fs`** | native_sim | littlefs mounted at `/lfs1` for fs-group file upload/download. |
 | **`serial`** (roomy) | mps2 | Cortex-M3, 4 MB SRAM via a flash overlay: one runnable image with **every** non-img group, fs file round-trips, and large buffers. |
-| **`serial_recovery`** | mps2 | Do-it-all MCUboot RAM_LOAD image — boots **straight into the full app** (every group incl. img) serving SMP on uart0 and logging on uart1. `os reset boot_mode=1` re-enters MCUboot **serial recovery** on demand; an upload there persists across the soft reset (slots live in a non-erased RAM-backed flash simulator). Launched with two QEMU loaders: the MCUboot `.hex` plus the `.signed.bin` dropped into slot0. |
+| **`serial_recovery`** | mps2 | Do-it-all MCUboot RAM_LOAD image — boots **straight into the full app** (every group incl. img) serving SMP on uart0 and logging on uart1. `os reset boot_mode=1` re-enters MCUboot **serial recovery** on demand; an upload there persists across the soft reset (slots live in a non-erased RAM-backed flash simulator). Recovery advertises the MCUmgr params command, so a client can negotiate buffers against the bootloader (see `recovery_buf_size`). Launched with two QEMU loaders: the MCUboot `.hex` plus the `.signed.bin` dropped into slot0. |
 | **`serial_recovery_raw`** | mps2 | The `serial_recovery` image, but both MCUboot recovery and the app speak the **raw** (non-console) SMP serial encoding — no base64/CRC/console framing, packets framed by the SMP header length (`CONFIG_BOOT_SERIAL_RAW_PROTOCOL` + `CONFIG_UART_MCUMGR_RAW_PROTOCOL`). For testing a client's raw serial transport against a real recovery server. Same two-loader launch as `serial_recovery`. |
 | **`serial`** | qemu_cortex_m0 | Merged MCUboot + signed app — exercises the img (DFU) group under emulation. |
 | **`serial`, `ble`, `serial_recovery`** | nrf52840dk | Build-only images for a hardware bench. |
@@ -71,7 +71,8 @@ client can build its test registry instead of hardcoding fixture rows. Fields:
 | `target`, `config` | e.g. `native_sim`, `serial_buf256`. |
 | `transport` | `serial`, `serial_raw`, `shell`, `udp`, or `bt`. |
 | `ip_family` | `ipv4` / `ipv6` for UDP, else `null`. |
-| `buf_size`, `buf_count` | `CONFIG_MCUMGR_TRANSPORT_NETBUF_*`. |
+| `buf_size`, `buf_count` | The **app** SMP server's `CONFIG_MCUMGR_TRANSPORT_NETBUF_*`. |
+| `recovery_buf_size`, `recovery_buf_count` | What the **bootloader's** serial-recovery server advertises via the MCUmgr params command (`CONFIG_BOOT_SERIAL_MAX_RECEIVE_SIZE`, a decoded ceiling, and always `1`) — what a client reads *while in recovery*, distinct from the app `buf_size`. `null` unless the image is a serial-recovery build with `CONFIG_BOOT_MGMT_MCUMGR_PARAMS=y`. |
 | `line_length_max` | Max serial frame line the server accepts (`null` for non-serial). |
 | `udp_port` | UDP listen port (`null` for non-UDP). |
 | `groups` | Enabled MCUmgr command groups, e.g. `["os","stat","fs","enum"]`. |
