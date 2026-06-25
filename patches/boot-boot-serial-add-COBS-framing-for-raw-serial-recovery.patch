@@ -1,0 +1,725 @@
+From e874fa4b51141af7fc7cb15a9921d3a68bdc77de Mon Sep 17 00:00:00 2001
+From: JP Hutchins <jp@intercreate.io>
+Date: Wed, 24 Jun 2026 14:03:03 -0700
+Subject: [PATCH] boot: boot_serial: add COBS framing for raw serial recovery
+
+Add BOOT_SERIAL_RAW_PROTOCOL_COBS, a framing layer on top of the raw
+(non-console) SMP recovery protocol that wraps each SMP packet as:
+
+    COBS(header || payload || CRC16) || 0x00
+
+The CRC16 is CRC-16/XMODEM (polynomial 0x1021, initial value 0x0000, no
+reflection), computed over the header and payload and appended big-endian,
+identical to the CRC used by the SMP over console encoding. The packet and
+its CRC are then COBS-encoded, which removes every 0x00 from the stream, so
+a single trailing 0x00 is an unambiguous frame delimiter.
+
+Unlike the bare raw protocol, this encoding is self-synchronising: the
+delimiter gives a resync point after any corruption or truncation, and the
+CRC16 rejects damaged packets. It therefore takes over the role of the input
+timeout, and the two are mutually exclusive. The existing
+BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT option becomes one member of a new
+choice, alongside the COBS option and BOOT_SERIAL_RAW_PROTOCOL_NONE (the
+original unframed behaviour). Migration: a configuration that previously set
+CONFIG_BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT=n to obtain the unframed raw
+behaviour must now set CONFIG_BOOT_SERIAL_RAW_PROTOCOL_NONE=y; configurations
+that leave the timeout at its default, or set it =y, are unaffected.
+
+The COBS codec is a small dependency-free module (boot_serial/src/cobs.c)
+rather than Zephyr's CONFIG_COBS, which is net_buf-based and would pull the
+net_buf subsystem into serial recovery. It decodes in place, so the receive
+buffer grows only by the COBS overhead (at most one byte per 254 input bytes,
+under 1%) plus the delimiter.
+
+The SMP client must be configured to use a matching COBS+CRC16 transport. No
+stock mcumgr client speaks this encoding yet, so this option is provided for
+evaluation and community review; the PR is intentionally a draft to gauge
+interest.
+
+A serial_recovery_raw_cobs.conf fragment and a matching Twister build test
+(sample.bootloader.mcuboot.serial_recovery_raw_cobs) are added, along with a
+native_sim ztest for the COBS codec (boot/zephyr/tests/cobs).
+
+Signed-off-by: JP Hutchins <jp@intercreate.io>
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ boot/boot_serial/src/boot_serial.c            | 105 +++++++++++++++-
+ boot/boot_serial/src/cobs.c                   |  74 ++++++++++++
+ boot/boot_serial/src/cobs.h                   |  58 +++++++++
+ boot/zephyr/CMakeLists.txt                    |   4 +
+ boot/zephyr/Kconfig.serial_recovery           |  38 +++++-
+ .../include/mcuboot_config/mcuboot_config.h   |   4 +
+ boot/zephyr/sample.yaml                       |   6 +
+ boot/zephyr/serial_recovery_raw_cobs.conf     |   5 +
+ boot/zephyr/tests/cobs/CMakeLists.txt         |  17 +++
+ boot/zephyr/tests/cobs/prj.conf               |   1 +
+ boot/zephyr/tests/cobs/src/main.c             | 112 ++++++++++++++++++
+ boot/zephyr/tests/cobs/testcase.yaml          |   6 +
+ .../serial-recovery-raw-cobs.md               |  20 ++++
+ docs/serial_recovery.md                       |  31 +++++
+ 14 files changed, 475 insertions(+), 6 deletions(-)
+ create mode 100644 boot/boot_serial/src/cobs.c
+ create mode 100644 boot/boot_serial/src/cobs.h
+ create mode 100644 boot/zephyr/serial_recovery_raw_cobs.conf
+ create mode 100644 boot/zephyr/tests/cobs/CMakeLists.txt
+ create mode 100644 boot/zephyr/tests/cobs/prj.conf
+ create mode 100644 boot/zephyr/tests/cobs/src/main.c
+ create mode 100644 boot/zephyr/tests/cobs/testcase.yaml
+ create mode 100644 docs/release-notes.d/serial-recovery-raw-cobs.md
+
+diff --git a/boot/boot_serial/src/boot_serial.c b/boot/boot_serial/src/boot_serial.c
+index c89bb478b7..893c57c9a3 100644
+--- a/boot/boot_serial/src/boot_serial.c
++++ b/boot/boot_serial/src/boot_serial.c
+@@ -66,6 +66,7 @@
+ 
+ #include "boot_serial/boot_serial.h"
+ #include "boot_serial_priv.h"
++#include "cobs.h"
+ #include "mcuboot_config/mcuboot_config.h"
+ #include "../src/bootutil_priv.h"
+ 
+@@ -160,7 +161,18 @@ BOOT_LOG_MODULE_DECLARE(mcuboot);
+ #define SWAP_USING_OFFSET_SECTOR_UPDATE_BEGIN 1
+ #define BOOT_DIRECT_UPLOAD_SECONDARY_SLOT_ID_REMAINDER 0
+ 
++#ifdef MCUBOOT_SERIAL_RAW_PROTOCOL_COBS
++/*
++ * The receive buffer must hold the COBS-encoded form of a maximum-size packet
++ * (header plus payload, bounded by MCUBOOT_SERIAL_MAX_RECEIVE_SIZE) together
++ * with its 2-byte CRC16 and the trailing 0x00 frame delimiter.
++ */
++#define BOOT_SERIAL_COBS_PRE_LEN  (MCUBOOT_SERIAL_MAX_RECEIVE_SIZE + 2)
++#define BOOT_SERIAL_COBS_BUF_SIZE (COBS_ENCODED_MAX(BOOT_SERIAL_COBS_PRE_LEN) + 1)
++static char in_buf[BOOT_SERIAL_COBS_BUF_SIZE];
++#else
+ static char in_buf[MCUBOOT_SERIAL_MAX_RECEIVE_SIZE + 1];
++#endif
+ #ifndef MCUBOOT_SERIAL_RAW_PROTOCOL
+ static char dec_buf[MCUBOOT_SERIAL_MAX_RECEIVE_SIZE + 1];
+ #endif
+@@ -1431,8 +1443,28 @@ boot_serial_output(void)
+     bs_hdr->nh_group = htons(bs_hdr->nh_group);
+ 
+ #ifdef MCUBOOT_SERIAL_RAW_PROTOCOL
++#ifdef MCUBOOT_SERIAL_RAW_PROTOCOL_COBS
++    uint16_t crc = crc16_itu_t(CRC16_INITIAL_CRC, (uint8_t *)bs_hdr, sizeof(*bs_hdr));
++    crc = htons(crc16_itu_t(crc, data, len));
++    uint8_t cobs_frame[BOOT_SERIAL_OUT_MAX + sizeof(*bs_hdr) + sizeof(crc)];
++    uint8_t cobs_out[COBS_ENCODED_MAX(sizeof(cobs_frame)) + 1];
++    size_t frame_len = 0;
++    size_t out_len;
++
++    memcpy(&cobs_frame[frame_len], bs_hdr, sizeof(*bs_hdr));
++    frame_len += sizeof(*bs_hdr);
++    memcpy(&cobs_frame[frame_len], data, len);
++    frame_len += len;
++    memcpy(&cobs_frame[frame_len], &crc, sizeof(crc));
++    frame_len += sizeof(crc);
++
++    out_len = cobs_encode(frame_len, cobs_frame, cobs_out);
++    cobs_out[out_len++] = 0;
++    boot_uf->write((const char *)cobs_out, out_len);
++#else
+     boot_uf->write((const char *)bs_hdr, sizeof(*bs_hdr));
+     boot_uf->write(data, len);
++#endif
+ #else
+ #ifdef __ZEPHYR__
+     crc =  crc16_itu_t(CRC16_INITIAL_CRC, (uint8_t *)bs_hdr, sizeof(*bs_hdr));
+@@ -1551,7 +1583,7 @@ boot_serial_in_dec(char *in, int inlen, char *out, int *out_off, int maxout)
+ }
+ #endif /* !MCUBOOT_SERIAL_RAW_PROTOCOL */
+ 
+-#ifdef MCUBOOT_SERIAL_RAW_PROTOCOL
++#if defined(MCUBOOT_SERIAL_RAW_PROTOCOL) && !defined(MCUBOOT_SERIAL_RAW_PROTOCOL_COBS)
+ /* Dispatch every complete raw SMP packet at the front of "buf" (length from the
+  * SMP header, capacity "max_input") via boot_serial_input(), keeping any
+  * trailing bytes; returns the count of unconsumed bytes left in "buf".
+@@ -1591,7 +1623,58 @@ boot_serial_input_raw(char *buf, int len, int max_input)
+ 
+     return len;
+ }
+-#endif /* MCUBOOT_SERIAL_RAW_PROTOCOL */
++#endif /* MCUBOOT_SERIAL_RAW_PROTOCOL && !MCUBOOT_SERIAL_RAW_PROTOCOL_COBS */
++
++#ifdef MCUBOOT_SERIAL_RAW_PROTOCOL_COBS
++/* Dispatch every complete COBS frame (terminated by a 0x00 delimiter) at the
++ * front of "buf" via boot_serial_input(): each frame is COBS-decoded in place,
++ * its trailing CRC16 verified, and the SMP packet handed on. A frame that is
++ * malformed, fails CRC, or decodes larger than "max_decoded" is dropped; the
++ * next delimiter is the resync point. Returns the count of bytes left in "buf"
++ * (a still-incomplete trailing frame, moved to the front).
++ */
++static int
++boot_serial_input_cobs(char *buf, int len, int max_decoded)
++{
++    int consumed = 0;
++
++    for (int i = 0; i < len; i++) {
++        if (buf[i] != 0) {
++            continue;
++        }
++
++        const int frame_len = i - consumed;
++        if (frame_len > 0) {
++            /* "dec" spans the SMP packet plus its trailing 2-byte CRC, so it
++             * must hold at least a header and CRC and at most a max-size packet
++             * plus CRC. The CRC self-checks to zero over the whole span.
++             */
++            const size_t dec = cobs_decode(
++                frame_len,
++                &buf[consumed],
++                &buf[consumed]
++            );
++
++            if (
++                dec != SIZE_MAX &&
++                dec >= sizeof(struct nmgr_hdr) + sizeof(uint16_t) &&
++                dec <= (size_t)max_decoded + sizeof(uint16_t) &&
++                crc16_itu_t(CRC16_INITIAL_CRC, &buf[consumed], dec) == 0
++            ) {
++                boot_serial_input(&buf[consumed], (int)(dec - sizeof(uint16_t)));
++            }
++        }
++
++        consumed = i + 1;
++    }
++
++    if (consumed > 0 && consumed < len) {
++        memmove(buf, &buf[consumed], (size_t)(len - consumed));
++    }
++
++    return len - consumed;
++}
++#endif /* MCUBOOT_SERIAL_RAW_PROTOCOL_COBS */
+ 
+ /*
+  * Task which waits reading console, expecting to get image over
+@@ -1617,7 +1700,11 @@ boot_serial_read_console(const struct boot_uart_funcs *f,int timeout_in_ms)
+ #endif
+ 
+     boot_uf = f;
++#ifdef MCUBOOT_SERIAL_RAW_PROTOCOL_COBS
++    max_input = MCUBOOT_SERIAL_MAX_RECEIVE_SIZE;
++#else
+     max_input = sizeof(in_buf);
++#endif
+ 
+     off = 0;
+     while (timeout_in_ms > 0 || bs_entry) {
+@@ -1653,6 +1740,19 @@ boot_serial_read_console(const struct boot_uart_funcs *f,int timeout_in_ms)
+         }
+         off += rc;
+ #ifdef MCUBOOT_SERIAL_RAW_PROTOCOL
++#ifdef MCUBOOT_SERIAL_RAW_PROTOCOL_COBS
++        /*
++         * COBS framing: accumulate bytes until a 0x00 delimiter completes one
++         * or more frames, dispatch them, and keep any trailing partial frame.
++         * The delimiter and per-frame CRC make the stream self-synchronising,
++         * so no input timeout is required.
++         */
++        off = boot_serial_input_cobs(in_buf, off, max_input);
++        if (off == (int)sizeof(in_buf)) {
++            /* Full buffer with no delimiter: oversized or garbage; resync. */
++            off = 0;
++        }
++#else
+         /*
+          * Raw protocol: bytes are accumulated until one or more full SMP
+          * packets have been received; a single read may carry several complete
+@@ -1667,6 +1767,7 @@ boot_serial_read_console(const struct boot_uart_funcs *f,int timeout_in_ms)
+         raw_input_start = os_uptime_get_ms_32();
+ #endif
+         off = boot_serial_input_raw(in_buf, off, max_input);
++#endif /* MCUBOOT_SERIAL_RAW_PROTOCOL_COBS */
+ #else
+         if (!full_line) {
+             if (off == max_input) {
+diff --git a/boot/boot_serial/src/cobs.c b/boot/boot_serial/src/cobs.c
+new file mode 100644
+index 0000000000..818fd6dd08
+--- /dev/null
++++ b/boot/boot_serial/src/cobs.c
+@@ -0,0 +1,74 @@
++/*
++ * Copyright (c) 2026 Intercreate, Inc.
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include "cobs.h"
++
++enum {
++    /* Code byte for a maximal group: cobs_run_max literals, no implicit zero. */
++    cobs_code_full = cobs_run_max + 1,
++};
++
++size_t cobs_encode(
++    size_t src_size,
++    uint8_t const src[static restrict src_size],
++    uint8_t dst[static restrict COBS_ENCODED_MAX(src_size)]
++) {
++    size_t dst_idx = 1;
++    size_t code_idx = 0;
++    uint8_t code = 1;
++
++    for (size_t src_idx = 0; src_idx < src_size; src_idx += 1) {
++        if (src[src_idx] != 0) {
++            dst[dst_idx] = src[src_idx];
++            dst_idx += 1;
++            code += 1;
++            if (code != cobs_code_full) {
++                continue;
++            }
++        }
++        dst[code_idx] = code;
++        code_idx = dst_idx;
++        dst_idx += 1;
++        code = 1;
++    }
++    dst[code_idx] = code;
++
++    return dst_idx;
++}
++
++size_t cobs_decode(
++    size_t src_size,
++    uint8_t const src[static src_size],
++    uint8_t dst[static src_size]
++) {
++    size_t dst_idx = 0;
++    size_t src_idx = 0;
++
++    while (src_idx < src_size) {
++        uint8_t const code = src[src_idx];
++        src_idx += 1;
++
++        if (code == 0) {
++            return SIZE_MAX;
++        }
++
++        for (uint8_t i = 1; i < code; i += 1) {
++            if (src_idx >= src_size) {
++                return SIZE_MAX;
++            }
++            dst[dst_idx] = src[src_idx];
++            dst_idx += 1;
++            src_idx += 1;
++        }
++
++        if (code != cobs_code_full && src_idx < src_size) {
++            dst[dst_idx] = 0;
++            dst_idx += 1;
++        }
++    }
++
++    return dst_idx;
++}
+diff --git a/boot/boot_serial/src/cobs.h b/boot/boot_serial/src/cobs.h
+new file mode 100644
+index 0000000000..ca8081c174
+--- /dev/null
++++ b/boot/boot_serial/src/cobs.h
+@@ -0,0 +1,58 @@
++/*
++ * Copyright (c) 2026 Intercreate, Inc.
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#ifndef H_COBS_
++#define H_COBS_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++enum {
++    /* COBS appends one code byte per run of this many non-zero input bytes. */
++    cobs_run_max = 254,
++};
++
++/*
++ * Worst-case COBS-encoded length for "len" decoded bytes, excluding any frame
++ * delimiter. A macro rather than a function so it can size a buffer at compile
++ * time; "len" is evaluated more than once.
++ */
++#define COBS_ENCODED_MAX(len) ((len) + (len) / cobs_run_max + 1)
++
++/*
++ * Encode "src_size" bytes of "src" into "dst", replacing every 0x00 so the
++ * encoded output may be terminated with a lone 0x00 delimiter. The array-bound
++ * syntax states the contract: "dst" must hold COBS_ENCODED_MAX(src_size) bytes,
++ * and "restrict" means "dst" and "src" must not alias. Returns the number of
++ * bytes written to "dst".
++ */
++size_t cobs_encode(
++    size_t src_size,
++    uint8_t const src[static restrict src_size],
++    uint8_t dst[static restrict COBS_ENCODED_MAX(src_size)]
++);
++
++/*
++ * Decode "src_size" COBS bytes of "src" (with the trailing delimiter already
++ * removed) into "dst", which may alias "src" for in-place decoding (hence no
++ * "restrict"); the decoded length never exceeds "src_size". Returns the decoded
++ * length, or SIZE_MAX if "src" is not a well-formed COBS frame.
++ */
++size_t cobs_decode(
++    size_t src_size,
++    uint8_t const src[static src_size],
++    uint8_t dst[static src_size]
++);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* H_COBS_ */
+diff --git a/boot/zephyr/CMakeLists.txt b/boot/zephyr/CMakeLists.txt
+index 39a848a356..cac40a6dc9 100644
+--- a/boot/zephyr/CMakeLists.txt
++++ b/boot/zephyr/CMakeLists.txt
+@@ -307,6 +307,10 @@ if(CONFIG_MCUBOOT_SERIAL)
+     ${BOOT_DIR}/boot_serial/src/zcbor_bulk.c
+   )
+ 
++  zephyr_sources_ifdef(CONFIG_BOOT_SERIAL_RAW_PROTOCOL_COBS
++    ${BOOT_DIR}/boot_serial/src/cobs.c
++  )
++
+   zephyr_include_directories(
+     ${BOOT_DIR}/bootutil/include
+     ${BOOT_DIR}/boot_serial/include
+diff --git a/boot/zephyr/Kconfig.serial_recovery b/boot/zephyr/Kconfig.serial_recovery
+index 45d05f4a40..caef1685a6 100644
+--- a/boot/zephyr/Kconfig.serial_recovery
++++ b/boot/zephyr/Kconfig.serial_recovery
+@@ -58,10 +58,26 @@ config BOOT_SERIAL_RAW_PROTOCOL
+ 	  length field of the SMP header. The SMP client must be configured
+ 	  to use a matching raw transport.
+ 
+-config BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT
+-	bool "Raw protocol input expiration"
++choice BOOT_SERIAL_RAW_PROTOCOL_RECOVERY
++	prompt "Raw protocol packet delimiting and stall recovery"
+ 	depends on BOOT_SERIAL_RAW_PROTOCOL
+-	default y
++	default BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT
++	help
++	  The raw protocol carries SMP packets as binary with boundaries taken
++	  from the SMP header length field. This selects how a truncated or
++	  corrupt transfer is detected and recovered from. The options are
++	  mutually exclusive.
++
++config BOOT_SERIAL_RAW_PROTOCOL_NONE
++	bool "No delimiting or recovery"
++	help
++	  Packet boundaries come solely from the SMP header length. A truncated
++	  or malformed packet has no resync point and can permanently wedge
++	  serial recovery. This matches the original raw behaviour with the input
++	  timeout disabled.
++
++config BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT
++	bool "Input expiration timeout"
+ 	help
+ 	  Discard a partially received raw SMP packet after a period without new
+ 	  data, so that a stalled or malformed transfer cannot permanently wedge
+@@ -69,7 +85,21 @@ config BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT
+ 	  no CRC or framing to detect a truncated packet, so there is otherwise no
+ 	  way to resynchronise the input stream. This mirrors Zephyr's
+ 	  MCUMGR_TRANSPORT_RAW_UART_INPUT_TIMEOUT (zephyrproject-rtos/zephyr#101821)
+-	  and is enabled by default because raw recovery is unsafe without it.
++	  and is the default because raw recovery is unsafe without it.
++
++config BOOT_SERIAL_RAW_PROTOCOL_COBS
++	bool "COBS framing with CRC16"
++	select CRC
++	help
++	  Wrap each raw SMP packet as COBS(header || payload || CRC16) followed by
++	  a single 0x00 frame delimiter. The delimiter is an unambiguous resync
++	  point and the CRC16 (CRC-16/XMODEM, identical to the SMP over console
++	  protocol) detects corruption, so no input timeout is required. This adds
++	  the COBS codec and a CRC16 and grows the receive buffer by less than 1%.
++	  The SMP client must be configured to use a matching COBS+CRC transport;
++	  no stock mcumgr client speaks this encoding yet.
++
++endchoice
+ 
+ config BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT_MS
+ 	int "Raw protocol input expiration timeout (ms)"
+diff --git a/boot/zephyr/include/mcuboot_config/mcuboot_config.h b/boot/zephyr/include/mcuboot_config/mcuboot_config.h
+index 66a0220b04..4e0a77f7ff 100644
+--- a/boot/zephyr/include/mcuboot_config/mcuboot_config.h
++++ b/boot/zephyr/include/mcuboot_config/mcuboot_config.h
+@@ -362,6 +362,10 @@
+         CONFIG_BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT_MS
+ #endif
+ 
++#ifdef CONFIG_BOOT_SERIAL_RAW_PROTOCOL_COBS
++#define MCUBOOT_SERIAL_RAW_PROTOCOL_COBS
++#endif
++
+ #ifdef CONFIG_MCUBOOT_SERIAL
+ #define MCUBOOT_SERIAL_RECOVERY
+ #endif
+diff --git a/boot/zephyr/sample.yaml b/boot/zephyr/sample.yaml
+index 5b418e9e3c..e61beaaf21 100644
+--- a/boot/zephyr/sample.yaml
++++ b/boot/zephyr/sample.yaml
+@@ -53,6 +53,12 @@ tests:
+     integration_platforms:
+       - nrf52840dk/nrf52840
+     tags: bootloader_mcuboot
++  sample.bootloader.mcuboot.serial_recovery_raw_cobs:
++    extra_args: EXTRA_CONF_FILE=serial_recovery_raw_cobs.conf
++    platform_allow:  nrf52840dk/nrf52840
++    integration_platforms:
++      - nrf52840dk/nrf52840
++    tags: bootloader_mcuboot
+   sample.bootloader.mcuboot.serial_recovery_all_options:
+     extra_args: EXTRA_CONF_FILE=serial_recovery.conf
+     extra_configs:
+diff --git a/boot/zephyr/serial_recovery_raw_cobs.conf b/boot/zephyr/serial_recovery_raw_cobs.conf
+new file mode 100644
+index 0000000000..9c975b4f22
+--- /dev/null
++++ b/boot/zephyr/serial_recovery_raw_cobs.conf
+@@ -0,0 +1,5 @@
++CONFIG_MCUBOOT_SERIAL=y
++CONFIG_BOOT_SERIAL_UART=y
++CONFIG_BOOT_SERIAL_RAW_PROTOCOL=y
++CONFIG_BOOT_SERIAL_RAW_PROTOCOL_COBS=y
++CONFIG_UART_CONSOLE=n
+diff --git a/boot/zephyr/tests/cobs/CMakeLists.txt b/boot/zephyr/tests/cobs/CMakeLists.txt
+new file mode 100644
+index 0000000000..5d0d3ee87c
+--- /dev/null
++++ b/boot/zephyr/tests/cobs/CMakeLists.txt
+@@ -0,0 +1,17 @@
++# Copyright (c) 2026 Intercreate, Inc.
++#
++# SPDX-License-Identifier: Apache-2.0
++
++cmake_minimum_required(VERSION 3.20.0)
++
++find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
++project(cobs_test)
++
++set(BOOT_SERIAL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../boot_serial/src)
++
++target_sources(app PRIVATE
++  src/main.c
++  ${BOOT_SERIAL_SRC_DIR}/cobs.c
++)
++
++target_include_directories(app PRIVATE ${BOOT_SERIAL_SRC_DIR})
+diff --git a/boot/zephyr/tests/cobs/prj.conf b/boot/zephyr/tests/cobs/prj.conf
+new file mode 100644
+index 0000000000..9467c29268
+--- /dev/null
++++ b/boot/zephyr/tests/cobs/prj.conf
+@@ -0,0 +1 @@
++CONFIG_ZTEST=y
+diff --git a/boot/zephyr/tests/cobs/src/main.c b/boot/zephyr/tests/cobs/src/main.c
+new file mode 100644
+index 0000000000..c0c2392539
+--- /dev/null
++++ b/boot/zephyr/tests/cobs/src/main.c
+@@ -0,0 +1,112 @@
++/*
++ * Copyright (c) 2026 Intercreate, Inc.
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include <zephyr/ztest.h>
++#include <string.h>
++
++#include "cobs.h"
++
++enum {
++    test_payload_max = 600,
++};
++
++static uint8_t payload[test_payload_max];
++static uint8_t encoded[COBS_ENCODED_MAX(test_payload_max)];
++static uint8_t decoded[test_payload_max];
++
++/* Deterministic xorshift32 so any failure reproduces from the fixed seed. */
++static uint32_t rng_state = 0x1234567u;
++static uint32_t rng(void)
++{
++    rng_state ^= rng_state << 13;
++    rng_state ^= rng_state >> 17;
++    rng_state ^= rng_state << 5;
++    return rng_state;
++}
++
++/* Encode then decode payload[0..len); assert the encoded stream is zero-free
++ * and within the worst-case bound, and that decode inverts encode both
++ * out-of-place and in place (dst aliasing src). */
++static void check_roundtrip(size_t len)
++{
++    size_t enc_len = cobs_encode(len, payload, encoded);
++
++    zassert_true(enc_len <= COBS_ENCODED_MAX(len),
++                 "len %zu: encoded %zu exceeds bound", len, enc_len);
++    for (size_t i = 0; i < enc_len; i++) {
++        zassert_not_equal(encoded[i], 0,
++                          "len %zu: 0x00 in encoded stream at %zu", len, i);
++    }
++
++    zassert_equal(cobs_decode(enc_len, encoded, decoded), len,
++                  "len %zu: decoded length mismatch", len);
++    zassert_mem_equal(decoded, payload, len, "len %zu: payload mismatch", len);
++
++    zassert_equal(cobs_decode(enc_len, encoded, encoded), len,
++                  "len %zu: in-place length mismatch", len);
++    zassert_mem_equal(encoded, payload, len, "len %zu: in-place mismatch", len);
++}
++
++ZTEST_SUITE(cobs, NULL, NULL, NULL, NULL, NULL);
++
++ZTEST(cobs, test_roundtrip_fuzz)
++{
++    for (int iter = 0; iter < 20000; iter++) {
++        size_t len = rng() % (test_payload_max + 1);
++        unsigned int mode = rng() % 4;
++
++        for (size_t i = 0; i < len; i++) {
++            switch (mode) {
++            case 0: payload[i] = rng(); break;                   /* random */
++            case 1: payload[i] = 0; break;                       /* all zero */
++            case 2: payload[i] = 0xFF; break;                    /* >254 non-zero runs */
++            case 3: payload[i] = (rng() % 4) ? rng() : 0; break; /* sparse zeros */
++            }
++        }
++        check_roundtrip(len);
++    }
++}
++
++ZTEST(cobs, test_empty)
++{
++    check_roundtrip(0);
++}
++
++ZTEST(cobs, test_run_boundaries)
++{
++    /* The classic COBS off-by-one lives at a run of exactly 254 non-zero bytes. */
++    memset(payload, 0xAB, sizeof(payload));
++    check_roundtrip(253);
++    check_roundtrip(254);
++    check_roundtrip(255);
++    check_roundtrip(508);   /* two maximal runs back to back */
++}
++
++ZTEST(cobs, test_overhead_within_bound)
++{
++    /* All-non-zero is the worst case: no zeros for COBS to absorb. */
++    memset(payload, 0xAB, sizeof(payload));
++    for (size_t len = 0; len <= test_payload_max; len++) {
++        size_t enc_len = cobs_encode(len, payload, encoded);
++        zassert_true(enc_len <= COBS_ENCODED_MAX(len),
++                     "len %zu encoded to %zu, exceeds bound", len, enc_len);
++    }
++}
++
++ZTEST(cobs, test_malformed_returns_sizemax)
++{
++    uint8_t out[8];
++
++    /* A 0x00 code byte cannot occur in a valid COBS frame. */
++    uint8_t zero_code[] = { 0x00 };
++    zassert_equal(cobs_decode(sizeof(zero_code), zero_code, out), SIZE_MAX,
++                  "zero code byte not rejected");
++
++    /* Truncated group: the code promises 4 more bytes, only 1 is present. */
++    uint8_t truncated[] = { 0x05, 0x11 };
++    zassert_equal(cobs_decode(sizeof(truncated), truncated, out), SIZE_MAX,
++                  "truncated frame not rejected");
++}
+diff --git a/boot/zephyr/tests/cobs/testcase.yaml b/boot/zephyr/tests/cobs/testcase.yaml
+new file mode 100644
+index 0000000000..1dc192aebe
+--- /dev/null
++++ b/boot/zephyr/tests/cobs/testcase.yaml
+@@ -0,0 +1,6 @@
++tests:
++  bootloader.mcuboot.boot_serial.cobs:
++    platform_allow: native_sim
++    integration_platforms:
++      - native_sim
++    tags: bootloader_mcuboot
+diff --git a/docs/release-notes.d/serial-recovery-raw-cobs.md b/docs/release-notes.d/serial-recovery-raw-cobs.md
+new file mode 100644
+index 0000000000..edd9ec53a8
+--- /dev/null
++++ b/docs/release-notes.d/serial-recovery-raw-cobs.md
+@@ -0,0 +1,20 @@
++- Serial recovery: added the `BOOT_SERIAL_RAW_PROTOCOL_COBS` option,
++  which wraps the raw SMP encoding in COBS framing with a trailing
++  CRC16 (CRC-16/XMODEM, the same CRC used by the SMP over console
++  encoding). Each packet is sent as
++  `COBS(header || payload || crc16) || 0x00`. The `0x00` delimiter
++  gives an unambiguous resync point and the CRC16 rejects damaged
++  packets, so the encoding is self-synchronising and needs no input
++  timeout. It requires a matching client transport; no stock mcumgr
++  client speaks it yet, so it is provided for evaluation.
++- Serial recovery: `BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT` is now a
++  member of a choice together with the new
++  `BOOT_SERIAL_RAW_PROTOCOL_COBS` and `BOOT_SERIAL_RAW_PROTOCOL_NONE`
++  options, as the three are mutually exclusive ways to delimit and
++  recover the raw stream. The input timeout remains the default.
++  Migration: a configuration that previously set
++  `CONFIG_BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT=n` to obtain the
++  unframed raw behaviour must now set
++  `CONFIG_BOOT_SERIAL_RAW_PROTOCOL_NONE=y` instead. Configurations
++  that leave the timeout at its default, or set it `=y`, are
++  unaffected.
+diff --git a/docs/serial_recovery.md b/docs/serial_recovery.md
+index 6e842fb876..fee31e7ee4 100644
+--- a/docs/serial_recovery.md
++++ b/docs/serial_recovery.md
+@@ -74,6 +74,37 @@ consumed faster than with the console encoding. If a link can deliver data
+ faster than recovery drains it (received bytes are dropped when the buffers are
+ exhausted), increase ``BOOT_LINE_BUFS``.
+ 
++### COBS framing with CRC16
++
++Instead of the input timeout, the raw encoding can be wrapped in COBS
++(Consistent Overhead Byte Stuffing) framing with a trailing CRC16 by selecting
++``BOOT_SERIAL_RAW_PROTOCOL_COBS`` (Zephyr:
++``CONFIG_BOOT_SERIAL_RAW_PROTOCOL_COBS``). Each SMP packet is sent as:
++
++```
++COBS( header || payload || CRC16 ) || 0x00
++```
++
++The CRC16 is computed over the header and payload (CRC-16/XMODEM: polynomial
++``0x1021``, initial value ``0x0000``, no reflection — identical to the CRC used
++by the SMP over console encoding) and appended most-significant byte first. That
++byte order is what lets the receiver validate a frame with the single check
++``crc16(header || payload || CRC16) == 0``. The packet and its CRC are then
++COBS-encoded, which removes every ``0x00`` byte from the stream, so a single
++trailing ``0x00`` is an unambiguous frame delimiter. COBS adds at most one byte
++per 254 bytes of input (under 1% overhead).
++
++Unlike the bare raw encoding, this is self-synchronising: the delimiter gives an
++unambiguous resync point after any corruption or truncation, and the CRC16
++rejects damaged packets, so no input timeout is needed. For that reason
++``BOOT_SERIAL_RAW_PROTOCOL_COBS`` and
++``BOOT_SERIAL_RAW_PROTOCOL_INPUT_TIMEOUT`` are mutually exclusive (they are
++members of the same choice, alongside ``BOOT_SERIAL_RAW_PROTOCOL_NONE`` for the
++unframed behaviour). The receive buffer grows by the COBS overhead plus the
++delimiter (under 1%).
++
++The SMP client must be configured to use a matching COBS+CRC16 transport.
++
+ ## Image uploading
+ 
+ Uploading an image is targeted to the primary slot by default.

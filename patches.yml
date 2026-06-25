@@ -1,0 +1,12 @@
+checkout-command: git checkout .
+clean-command: git clean -d -f -x
+patches:
+- author: JP Hutchins
+  date: '2026-06-24'
+  email: hidden@github.com
+  merge-pr: https://github.com/intercreate/mcuboot/pull/5
+  merge-status: false
+  module: bootloader/mcuboot
+  path: boot-boot-serial-add-COBS-framing-for-raw-serial-recovery.patch
+  sha256sum: a2a60b134fabb07417a330cb77ec6a756c8a4927fbbbd9797b13670168468bd7
+  upstreamable: true
