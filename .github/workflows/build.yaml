@@ -76,12 +76,16 @@ jobs:
 
       - uses: astral-sh/setup-uv@v8.1.0
 
+      # No patches here: `--exclude-tag patched` drops fixtures needing an
+      # out-of-tree module patch so these stay on pinned upstream revisions. The
+      # build-patched job builds them in isolation.
       - name: Build fixtures (Twister, all configs for this leg)
         working-directory: working_directory
         run: |
           args=""
           for p in ${{ matrix.platforms }}; do args="$args -p $p"; done
-          west twister -T apps --build-only --inline-logs -O twister-out $args
+          west twister -T apps --build-only --inline-logs -O twister-out $args \
+            --exclude-tag patched
 
       - name: Collect fixtures with canonical names and a manifest
         working-directory: working_directory
@@ -111,9 +115,67 @@ jobs:
           name: twister-logs-${{ matrix.leg }}
           path: working_directory/twister-out/**/build.log
 
+  # Builds the `patched`-tagged fixtures (only the COBS serial recovery one today,
+  # intercreate/mcuboot#5) in isolation from the mainline build, so a module patch
+  # touches only these binaries. west patch apply must run after action-zephyr-setup
+  # (its west update resets modules to pinned revisions) and before Twister.
+  build-patched:
+    name: Build patched fixtures (out-of-tree module patches)
+    needs: check-script
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: working_directory
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: working_directory
+          toolchains: arm-zephyr-eabi
+          ccache-cache-key: patched
+
+      - uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Apply out-of-tree patches (west patch)
+        working-directory: working_directory
+        run: west patch -l patches.yml -b patches apply
+
+      - name: Build patched fixtures (Twister, tag=patched)
+        working-directory: working_directory
+        run: >-
+          west twister -T apps --build-only --inline-logs -O twister-out
+          -p mps2/an385 --tag patched
+
+      - name: Collect fixtures with canonical names and a manifest
+        working-directory: working_directory
+        run: |
+          ver=$(west list zephyr --format='{revision}'); ver=${ver#v}
+          if [ "${#ver}" -ge 40 ]; then ver=${ver:0:12}; fi
+          uv run .github/scripts/collect_fixtures.py \
+            --git-sha "$GITHUB_SHA" --zephyr-version "$ver" \
+            --leg patched --twister-out twister-out --out-dir fixtures
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fixtures-patched
+          path: working_directory/fixtures/*
+          if-no-files-found: error
+
+      - name: Upload Twister logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: twister-logs-patched
+          path: working_directory/twister-out/**/build.log
+
   release:
     name: Publish per-commit release (newest is the repo 'latest')
-    needs: build
+    needs: [build, build-patched]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:

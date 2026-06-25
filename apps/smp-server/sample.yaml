@@ -464,7 +464,7 @@ tests:
     integration_platforms: [mps2/an385]
     extra_args:
       - *mps2_doitall_suffix
-      - >-
+      - &mps2_doitall_raw_conf >-
         EXTRA_CONF_FILE="raw_serial.conf;
         grp_os.conf;
         grp_fs.conf;
@@ -483,7 +483,33 @@ tests:
       - *mps2_doitall_log
       - *mps2_doitall_mcuboot_log
       - *mps2_doitall_mcuboot_dbg
-      - mcuboot_CONFIG_BOOT_SERIAL_RAW_PROTOCOL=y
+      - &mps2_doitall_raw_protocol mcuboot_CONFIG_BOOT_SERIAL_RAW_PROTOCOL=y
+
+  # COBS-framed raw recovery: like serial_recovery_raw, but MCUboot wraps each raw
+  # SMP packet as COBS(header || payload || CRC16) || 0x00 (intercreate/mcuboot#5,
+  # not upstream -- patches.yml + the build-patched CI job carry it). The app stays
+  # plain raw_serial (COBS is an MCUboot boot_serial feature), so the test drives
+  # recovery. For smpclient's COBS raw transport.
+  smp_server.fixture.serial_recovery_raw_cobs.mps2_an385:
+    sysbuild: true
+    # `patched`: needs an out-of-tree module patch. The mainline build drops this
+    # tag (--exclude-tag); the build-patched job builds it (--tag) after west patch.
+    tags: [smp_server, fixture, patched]
+    platform_allow: [mps2/an385]
+    integration_platforms: [mps2/an385]
+    extra_args:
+      - *mps2_doitall_suffix
+      - *mps2_doitall_raw_conf
+      - *mps2_doitall_overlay
+      - *mps2_doitall_mcuboot
+      - *mps2_doitall_ramload
+      - *mps2_doitall_unsigned
+      - *mps2_doitall_hex
+      - *mps2_doitall_log
+      - *mps2_doitall_mcuboot_log
+      - *mps2_doitall_mcuboot_dbg
+      - *mps2_doitall_raw_protocol
+      - mcuboot_CONFIG_BOOT_SERIAL_RAW_PROTOCOL_COBS=y
 
   # mps2/an385 buffer-size matrix on the do-it-all RAM_LOAD image: the same
   # every-group-incl-img recovery fixture above, swept across
